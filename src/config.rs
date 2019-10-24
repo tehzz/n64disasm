@@ -27,13 +27,13 @@ struct RawConfig {
 #[derive(Debug)]
 pub struct Config {
     /// List of all code sections
-    blocks: Vec<CodeBlock>,
+    pub blocks: Vec<CodeBlock>,
     /// Set of all overlays
-    overlays: HashSet<Overlay>,
+    pub overlays: HashSet<Overlay>,
     // map an overlay to all possible other overlays that could be loaded at the same time
-    overlay_map: OverlaySet,
+    pub overlay_map: OverlaySet,
     /// Set of labels from config file, sorted into global and overlayed bins
-    labels: LabelSet,
+    pub labels: LabelSet,
 }
 
 #[derive(Debug, Error)]
@@ -72,6 +72,7 @@ pub fn parse_config(p: &Path) -> Result<Config, ConfigParseError> {
             |(mut b, mut o), block| {
                 match block.kind {
                     BlockKind::BaseOverlay | BlockKind::Overlay => {
+                        // TODO: check for duplicate overlays and error
                         o.insert(block.name.clone().into());
                     }
                     BlockKind::Global => (),

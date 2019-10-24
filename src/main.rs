@@ -9,6 +9,9 @@ use structopt::StructOpt;
 /// It supports dissassembly of overlayed code.
 #[derive(Debug, StructOpt)]
 struct Opts {
+    /// Path to the ROM to be disassembled
+    #[structopt(parse(from_os_str))]
+    rom: PathBuf,
     /// Path to the ROM configuration YAML file
     #[structopt(parse(from_os_str))]
     config: PathBuf,
@@ -32,7 +35,8 @@ fn main() {
 }
 
 fn run(opts: Opts) -> Result<(), Box<dyn Error>> {
-    config::parse_config(&opts.config)?;
+    let config = config::parse_config(&opts.config)?;
+    disasm::pass1(config, &opts.rom)?;
 
     Ok(())
 }

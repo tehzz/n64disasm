@@ -1,8 +1,12 @@
+mod pass1;
+
 use crate::config::{RawCodeBlock, RawLabel};
 use err_derive::Error;
 use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
+
+pub use pass1::pass1;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Overlay(Rc<str>);
