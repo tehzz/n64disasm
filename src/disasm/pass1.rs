@@ -117,6 +117,9 @@ fn fold_instructions(
         state.links.extend(linked_values.filter(|l| !l.is_empty()));
     }
     // TODO: fix "move" instructions (id 423)
+    //if &insn.mnemonic == "sw" {
+    //    println!("{:#?}", &insn);
+    //}
     state.instructions.push(insn);
 
     Ok(state)

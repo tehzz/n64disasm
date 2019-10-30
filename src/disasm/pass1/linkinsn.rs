@@ -19,7 +19,7 @@ pub struct LinkState {
 impl LinkState {
     pub fn new() -> Self {
         Self {
-            registers: HashMap::with_capacity(32),
+            registers: HashMap::with_capacity(64),
             pc_delay_slot: DelaySlot::Inactive,
         }
     }
@@ -28,17 +28,12 @@ impl LinkState {
 #[derive(Debug, Copy, Clone)]
 pub struct LinkedVal {
     value: u32,
-    offset: Option<i16>,
     instruction: usize,
 }
 
 impl LinkedVal {
-    fn new(value: u32, offset: Option<i16>, instruction: usize) -> Self {
-        Self {
-            value,
-            offset,
-            instruction,
-        }
+    fn new(value: u32, instruction: usize) -> Self {
+        Self { value, instruction }
     }
 }
 
@@ -46,6 +41,7 @@ impl LinkedVal {
 pub enum LuiResolve {
     Empty,
     Pointer(LinkedVal),
+    PtrOff(LinkedVal, i16),
     Immediate(LinkedVal),
     Float(LinkedVal),
 }
@@ -77,6 +73,11 @@ impl fmt::Display for LuiResolve {
                 "Pointer to {:08x} at instruction {}",
                 l.value, l.instruction
             ),
+            Self::PtrOff(l, o) => write!(
+                f,
+                "Pointer to {:08x} with offset {} at instruction {}",
+                l.value, o, l.instruction
+            ),
             Self::Immediate(l) => write!(
                 f,
                 "Immediate value {:08x} at instruction {}",
@@ -84,7 +85,7 @@ impl fmt::Display for LuiResolve {
             ),
             Self::Float(l) => write!(
                 f,
-                "Float {} ({:08x}) at instruction {}",
+                "Float {:.5} ({:08x}) at instruction {}",
                 f32::from_bits(l.value),
                 l.value,
                 l.instruction
@@ -128,6 +129,10 @@ pub fn link_instructions<'s, 'i>(
     use LuiResolve::*;
     use LuiState::*;
 
+    // helper functions for combining 16-bit intermediates
+    let add_imms = |a, b| (((a as i32) << 16) + (b as i32)) as u32;
+    let or_imms = |a, b| ((a as u32) << 16) | (b as u16 as u32);
+
     let delay = &mut state.pc_delay_slot;
     let reg_state = &mut state.registers;
 
@@ -144,8 +149,7 @@ pub fn link_instructions<'s, 'i>(
     }
 
     // otherwise, look for specific instructions that typically indicate pointer or float loads
-    let op = insn.id.0;
-    match op {
+    match insn.id.0 {
         // Every immediate greater than 16bit in MIPS typically uses this instruction
         // to set the upper 16 bits. So, this has to set the upper bits of a register that
         // will be used in a later instruction as a pointer or float
@@ -162,24 +166,18 @@ pub fn link_instructions<'s, 'i>(
                 return Ok(None);
             }
 
-            Ok(reg_state
-                .get_mut(&dst)
-                .and_then(|state| match *state {
-                    Upper(_reg, upper, prior) => {
-                        let ptr = ((upper as i32) << 16) + (imm as i32);
-                        let ptr = ptr as u32;
-                        *state = Loaded(dst, ptr);
+            Ok(reg_state.get_mut(&dst).and_then(|state| match *state {
+                Upper(_reg, upper, prior) => {
+                    let ptr = add_imms(upper, imm);
+                    *state = Loaded(dst, ptr);
 
-                        Some((ptr, prior))
-                    }
-                    _ => None,
-                })
-                .and_then(|(ptr, prior)| {
-                    let lui_insn = Pointer(LinkedVal::new(ptr, None, prior));
-                    let lower_insn = Pointer(LinkedVal::new(ptr, None, offset));
-
+                    let lui_insn = Pointer(LinkedVal::new(ptr, prior));
+                    let lower_insn = Pointer(LinkedVal::new(ptr, offset));
                     Some(lui_insn.into_iter().chain(lower_insn))
-                }))
+                }
+                // TODO: either calculate a new pointer, or reset state
+                Loaded(..) => None,
+            }))
         }
         // The `ori` instruction is emitted with a matched `lui` for large immediate values
         INS_ORI => {
@@ -188,22 +186,18 @@ pub fn link_instructions<'s, 'i>(
                 return Ok(None);
             }
 
-            Ok(reg_state
-                .get_mut(&dst)
-                .and_then(|state| match *state {
-                    Upper(_reg, upper, prior) => {
-                        let val = ((upper as u32) << 16) | (imm as u16 as u32);
-                        *state = Loaded(dst, val);
-                        Some((val, prior))
-                    }
-                    _ => None,
-                })
-                .and_then(|(val, prior)| {
-                    let lui_insn = Immediate(LinkedVal::new(val, None, prior));
-                    let lower_insn = Immediate(LinkedVal::new(val, None, offset));
+            Ok(reg_state.get_mut(&dst).and_then(|state| match *state {
+                Upper(_reg, upper, prior) => {
+                    let val = or_imms(upper, imm);
+                    *state = Loaded(dst, val);
 
+                    let lui_insn = Immediate(LinkedVal::new(val, prior));
+                    let lower_insn = Immediate(LinkedVal::new(val, offset));
                     Some(lui_insn.into_iter().chain(lower_insn))
-                }))
+                }
+                // TODO: either calculate a new offset, or reset state
+                Loaded(..) => None,
+            }))
         }
         // Float constants (singles) are loaded by setting the upper bits with a `lui`,
         // and then setting the lower bits with an `ori`, if needed. This instruction
@@ -213,25 +207,47 @@ pub fn link_instructions<'s, 'i>(
                 .ok_or_else(|| MissingInsnComponent(insn.clone(), "mtc1 source reg"))?;
 
             if src.0 as u32 == MIPS_REG_ZERO {
-                let mtc1_zero = Float(LinkedVal::new(0, None, offset));
+                let mtc1_zero = Float(LinkedVal::new(0, offset));
                 return Ok(Some(mtc1_zero.into_iter().chain(Empty)));
             }
 
             Ok(reg_state.get_mut(&src).and_then(|state| match *state {
                 Upper(_reg, val, prior) => {
                     let val = (val as u32) << 16;
-                    let upper = Float(LinkedVal::new(val, None, prior));
-                    let mtc1 = Float(LinkedVal::new(val, None, offset));
+                    let upper = Float(LinkedVal::new(val, prior));
+                    let mtc1 = Float(LinkedVal::new(val, offset));
 
                     Some(upper.into_iter().chain(mtc1))
                 }
                 Loaded(_reg, val) => {
-                    let mtc1 = Float(LinkedVal::new(val, None, offset));
+                    let mtc1 = Float(LinkedVal::new(val, offset));
                     Some(mtc1.into_iter().chain(Empty))
                 }
             }))
         }
-        // load/store word/half/byte instructions?
+        // If a pointer is deferenced, the lower 16bit can be embedded in a load or store
+        // operation. If there are multiple uses of a base pointer, the full pointer
+        // can be loaded into a register and then offset by the load/store.
+        INS_SD | INS_SW | INS_SH | INS_SB | INS_LB | INS_LBU | INS_LH | INS_LHU | INS_LW
+        | INS_LWU | INS_LWC1 | INS_LWC2 | INS_LWC3 | INS_SWC1 | INS_SWC2 | INS_SWC3 | INS_LD
+        | INS_LDL | INS_LDR => {
+            let (base, imm) = get_mem_offset(&insn)?;
+
+            Ok(reg_state.get_mut(&base).and_then(|state| match *state {
+                Upper(reg, upper, prior) => {
+                    let ptr = add_imms(upper, imm);
+                    *state = Loaded(reg, ptr);
+
+                    let lui = Pointer(LinkedVal::new(ptr, prior));
+                    let mem = Pointer(LinkedVal::new(ptr, prior));
+                    Some(lui.into_iter().chain(mem))
+                }
+                Loaded(_reg, ptr) => {
+                    let mem = PtrOff(LinkedVal::new(ptr, offset), imm);
+                    Some(mem.into_iter().chain(Empty))
+                }
+            }))
+        }
         _ => Ok(None), // or, check if register is overwritten?
     }
 }
@@ -259,26 +275,38 @@ fn get_reg_n(operands: &[MipsOperand], n: usize) -> Option<RegId> {
 
 /// Get the set of (rd, rs, imm) from an `Instruction`
 fn get_dsimm_triple(insn: &Instruction) -> Result<(RegId, RegId, i16), LinkInsnErr> {
-    use LinkInsnErr::*;
+    use LinkInsnErr::MissingInsnComponent as IErr;
 
-    let dst = get_reg_n(&insn.operands, 0)
-        .ok_or_else(|| MissingInsnComponent(insn.clone(), "dst reg"))?;
-    let src = get_reg_n(&insn.operands, 1)
-        .ok_or_else(|| MissingInsnComponent(insn.clone(), "src reg"))?;
-    let imm =
-        get_imm(&insn.operands).ok_or_else(|| MissingInsnComponent(insn.clone(), "immediate"))?;
+    let dst = get_reg_n(&insn.operands, 0).ok_or_else(|| IErr(insn.clone(), "dst reg"))?;
+    let src = get_reg_n(&insn.operands, 1).ok_or_else(|| IErr(insn.clone(), "src reg"))?;
+    let imm = get_imm(&insn.operands).ok_or_else(|| IErr(insn.clone(), "immediate"))?;
 
     Ok((dst, src, imm))
 }
 
 /// Get the target register and immediate from a Lui instruction
 fn get_lui_ops(insn: &Instruction) -> Result<(RegId, i16), LinkInsnErr> {
-    use LinkInsnErr::*;
+    use LinkInsnErr::MissingInsnComponent as IErr;
 
-    let reg = get_reg_n(&insn.operands, 0)
-        .ok_or_else(|| MissingInsnComponent(insn.clone(), "lui reg"))?;
-    let imm = get_imm(&insn.operands)
-        .ok_or_else(|| MissingInsnComponent(insn.clone(), "lui immediate"))?;
+    let reg = get_reg_n(&insn.operands, 0).ok_or_else(|| IErr(insn.clone(), "lui reg"))?;
+    let imm = get_imm(&insn.operands).ok_or_else(|| IErr(insn.clone(), "lui immediate"))?;
 
     Ok((reg, imm))
+}
+
+/// Get the base register and offset for a load or store instruction
+fn get_mem_offset(insn: &Instruction) -> Result<(RegId, i16), LinkInsnErr> {
+    use LinkInsnErr::MissingInsnComponent as IErr;
+    use MipsOperand::Mem;
+
+    insn.operands
+        .iter()
+        .find_map(|op| {
+            if let Mem(mem) = op {
+                Some((mem.base(), mem.disp() as i16))
+            } else {
+                None
+            }
+        })
+        .ok_or_else(|| IErr(insn.clone(), "mem info for load or store"))
 }
