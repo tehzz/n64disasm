@@ -1,4 +1,4 @@
-mod common_insn;
+mod mipsinsn;
 mod pass1;
 
 use crate::config::{RawCodeBlock, RawLabel};
