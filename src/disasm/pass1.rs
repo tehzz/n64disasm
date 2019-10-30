@@ -1,8 +1,9 @@
 use crate::config::Config;
-use crate::disasm::{CodeBlock, Label};
+use crate::disasm::{common_insn::*, CodeBlock, Label};
 use arrayvec::ArrayString;
 use capstone::{
-    arch::mips::{MipsInsn::*, MipsOperand},
+    arch::mips::MipsOperand,
+    arch::mips::MipsReg::*,
     prelude::*,
     Insn,
 };
@@ -14,15 +15,7 @@ use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
 
-// Useful instructions from Capstone C enum
-const INS_J: u32 = MIPS_INS_J as u32;
-const INS_JAL: u32 = MIPS_INS_JAL as u32;
-const INS_BAL: u32 = MIPS_INS_BAL as u32;
-const INS_LUI: u32 = MIPS_INS_LUI as u32;
-const INS_ADDIU: u32 = MIPS_INS_ADDIU as u32;
-const INS_ADDI: u32 = MIPS_INS_ADDI as u32;
-const INS_ORI: u32 = MIPS_INS_ORI as u32;
-const INS_MTC1: u32 = MIPS_INS_MTC1 as u32;
+// TODO: Make register and instruction wrappers (of u32) that have equality for u32 and instruction type
 
 #[derive(Debug, Error)]
 pub enum Pass1Error {
@@ -71,7 +64,7 @@ pub fn pass1(config: Config, rom: &Path) -> Result<(), Pass1Error> {
         Ok((block, buf))
     };
 
-    for res in config_blocks.into_iter().map(read_rom).take(1) {
+    for res in config_blocks.into_iter().map(read_rom).take(5) {
         let (block, buf) = res?;
         let cs_instructions = cs.disasm_all(&buf, block.vaddr as u64)?;
         let num_insn = cs_instructions.len();
@@ -80,7 +73,7 @@ pub fn pass1(config: Config, rom: &Path) -> Result<(), Pass1Error> {
 
         let test = cs_instructions
             .iter()
-            .take(100)
+            .take(150)
             .inspect(|i| println!("{}", i))
             .map(|i| {
                 let detail = cs.insn_detail(&i)?;
@@ -98,7 +91,7 @@ pub fn pass1(config: Config, rom: &Path) -> Result<(), Pass1Error> {
             println!("{:4}{}", "", link);
         }
         println!("");
-        println!("{:?}", &test);
+        //println!("{:?}\n", &test);
     }
 
     Ok(())
@@ -108,6 +101,7 @@ pub fn pass1(config: Config, rom: &Path) -> Result<(), Pass1Error> {
 struct FoldInsnState {
     instructions: Vec<Instruction>,
     registers: HashMap<RegId, LuiState>,
+    pc_delay_slot: DelaySlot,
     links: Vec<LuiResolve>,
 }
 
@@ -116,6 +110,7 @@ impl FoldInsnState {
         Self {
             instructions: Vec::with_capacity(insn_size),
             registers: HashMap::with_capacity(32),
+            pc_delay_slot: DelaySlot::Inactive,
             links: Vec::new(),
         }
     }
@@ -127,10 +122,10 @@ fn fold_instructions(
 ) -> Result<FoldInsnState, Pass1Error> {
     let insn = insn?;
 
-    if let Some(linked_values) = link_instructions(&mut state.registers, &insn, offset)? {
-        state.links.extend(linked_values);
+    if let Some(linked_values) = link_instructions(&mut state.registers, &insn, offset, &mut state.pc_delay_slot)? {
+        state.links.extend(linked_values.filter(|l| !l.is_empty()));
     }
-
+    // TODO: fix "move" instructions (id 423)
     state.instructions.push(insn);
 
     Ok(state)
@@ -168,14 +163,34 @@ impl LinkedVal {
 
 #[derive(Debug, Copy, Clone)]
 enum LuiResolve {
+    Empty,
     Pointer(LinkedVal),
     Immediate(LinkedVal),
     Float(LinkedVal),
 }
 
+impl LuiResolve {
+    fn is_empty(&self) -> bool {
+        match self {
+            Self::Empty => true,
+            _ => false,
+        }
+    }
+}
+
+impl ::std::iter::IntoIterator for LuiResolve {
+    type Item = Self;
+    type IntoIter = ::std::iter::Once<Self>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        std::iter::once(self)
+    }
+}
+
 impl fmt::Display for LuiResolve {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            Self::Empty => write!(f,"Empty link...?"),
             Self::Pointer(l) => write!(
                 f,
                 "Pointer to {:08x} at instruction {}",
@@ -197,10 +212,31 @@ impl fmt::Display for LuiResolve {
     }
 }
 
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+enum DelaySlot {
+    Inactive,
+    Queued,
+    DelaySlot,
+    Resummed,
+}
+
+impl DelaySlot {
+    // return the next state of an instruction after a "CPU tick"
+    fn tick_pc(&self) -> Self {
+        match self {
+            Self::Inactive => Self::Inactive,
+            Self::Queued => Self::DelaySlot,
+            Self::DelaySlot => Self::Resummed,
+            Self::Resummed => Self::Inactive,
+        }
+    }
+}
+
 fn link_instructions<'s, 'i>(
     reg_state: &'s mut HashMap<RegId, LuiState>,
     insn: &'i Instruction,
     offset: usize,
+    delay: &'s mut DelaySlot,
 ) -> Result<Option<impl Iterator<Item = LuiResolve>>, Pass1Error> {
     use std::iter::once;
     use LuiResolve::*;
@@ -208,8 +244,14 @@ fn link_instructions<'s, 'i>(
     use Pass1Error::*;
 
     // reset register state on subroutine exit
-    if insn.jump.is_jrra() {
+    *delay = delay.tick_pc();
+
+    if *delay == DelaySlot::Resummed {
         reg_state.clear();
+    }
+    
+    if insn.jump.is_jrra() {
+        *delay = DelaySlot::Queued;
         return Ok(None);
     }
 
@@ -248,10 +290,10 @@ fn link_instructions<'s, 'i>(
                     _ => None,
                 })
                 .and_then(|(ptr, prior)| {
-                    let lui_insn = LinkedVal::new(ptr, None, prior);
-                    let lower_insn = LinkedVal::new(ptr, None, offset);
+                    let lui_insn = Pointer(LinkedVal::new(ptr, None, prior));
+                    let lower_insn = Pointer(LinkedVal::new(ptr, None, offset));
 
-                    Some(once(Pointer(lui_insn)).chain(once(Pointer(lower_insn))))
+                    Some(lui_insn.into_iter().chain(lower_insn))
                 }))
         }
         // The `ori` instruction is emitted with a matched `lui` for large immediate values
@@ -261,7 +303,7 @@ fn link_instructions<'s, 'i>(
                 return Ok(None);
             }
 
-            let output = reg_state
+            Ok(reg_state
                 .get_mut(&dst)
                 .and_then(|state| match *state {
                     Upper(_reg, upper, prior) => {
@@ -272,15 +314,39 @@ fn link_instructions<'s, 'i>(
                     _ => None,
                 })
                 .and_then(|(val, prior)| {
-                    let lui_insn = LinkedVal::new(val, None, prior);
-                    let lower_insn = LinkedVal::new(val, None, offset);
+                    let lui_insn = Immediate(LinkedVal::new(val, None, prior));
+                    let lower_insn = Immediate(LinkedVal::new(val, None, offset));
 
-                    Some(once(Immediate(lui_insn)).chain(once(Immediate(lower_insn))))
-                });
+                    Some(lui_insn.into_iter().chain(lower_insn))
+                }))
+        },
+        // Float constants (singles) are loaded by setting the upper bits with a `lui`,
+        // and then setting the lower bits with an `ori`, if needed. This instruction 
+        // then moves the float to cop1
+        INS_MTC1 => {
+            let src = get_reg_n(&insn.operands, 0)
+                .ok_or_else(|| MissingInsnComponent(insn.clone(), "mtc1 source reg"))?;
+            
+            if src.0 as u32 == MIPS_REG_ZERO {
+                let mtc1_zero = Float(LinkedVal::new(0, None, offset));
+                return Ok(Some(mtc1_zero.into_iter().chain(Empty)));
+            }
+            
+            Ok(reg_state.get_mut(&src).and_then(|state| match *state{
+                Upper(_reg, val, prior) => {
+                    let val = (val as u32) << 16;
+                    let upper = Float(LinkedVal::new(val, None, prior));
+                    let mtc1 = Float(LinkedVal::new(val, None, offset));
 
-            Ok(output)
-        }
-        INS_MTC1 => unimplemented!(),
+                    Some(upper.into_iter().chain(mtc1))
+                },
+                Loaded(_reg, val) => {
+                    let mtc1 = Float(LinkedVal::new(val, None, offset));
+                    Some(mtc1.into_iter().chain(Empty))
+                },
+            }))
+            
+        },
         // load/store word/half/byte instructions?
         _ => Ok(None), // or, check if register is overwritten?
     }
@@ -359,8 +425,6 @@ enum JumpKind {
 
 impl JumpKind {
     fn is_jrra(&self) -> bool {
-        use capstone::arch::mips::MipsReg::MIPS_REG_RA;
-
         match self {
             Self::JumpRegister(r) => r.0 as u32 == MIPS_REG_RA,
             _ => false,
