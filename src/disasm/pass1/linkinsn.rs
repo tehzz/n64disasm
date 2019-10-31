@@ -26,36 +26,45 @@ impl LinkState {
 }
 
 #[derive(Debug, Copy, Clone)]
-pub struct LinkedVal {
-    value: u32,
-    instruction: usize,
+pub struct Link {
+    pub value: u32,
+    pub instruction: usize,
 }
 
-impl LinkedVal {
+impl Link {
     fn new(value: u32, instruction: usize) -> Self {
         Self { value, instruction }
     }
 }
 
 #[derive(Debug, Copy, Clone)]
-pub enum LuiResolve {
+pub enum LinkedVal {
     Empty,
-    Pointer(LinkedVal),
-    PtrOff(LinkedVal, i16),
-    Immediate(LinkedVal),
-    Float(LinkedVal),
+    Pointer(Link),
+    PtrOff(Link, i16),
+    Immediate(Link),
+    Float(Link),
 }
 
-impl LuiResolve {
+impl LinkedVal {
     pub fn is_empty(&self) -> bool {
         match self {
             Self::Empty => true,
             _ => false,
         }
     }
+    pub fn get_link(&self) -> Option<Link> {
+        match self {
+            Self::Empty => None,
+            Self::Pointer(l) => Some(*l),
+            Self::PtrOff(l, _) => Some(*l),
+            Self::Immediate(l) => Some(*l),
+            Self::Float(l) => Some(*l),
+        }
+    }
 }
 
-impl ::std::iter::IntoIterator for LuiResolve {
+impl ::std::iter::IntoIterator for LinkedVal {
     type Item = Self;
     type IntoIter = ::std::iter::Once<Self>;
 
@@ -64,7 +73,7 @@ impl ::std::iter::IntoIterator for LuiResolve {
     }
 }
 
-impl fmt::Display for LuiResolve {
+impl fmt::Display for LinkedVal {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::Empty => write!(f, "Empty link...?"),
@@ -124,9 +133,9 @@ pub fn link_instructions<'s, 'i>(
     state: &'s mut LinkState,
     insn: &'i Instruction,
     offset: usize,
-) -> Result<Option<impl Iterator<Item = LuiResolve>>, LinkInsnErr> {
+) -> Result<Option<impl Iterator<Item = LinkedVal>>, LinkInsnErr> {
     use LinkInsnErr::*;
-    use LuiResolve::*;
+    use LinkedVal::*;
     use LuiState::*;
 
     // helper functions for combining 16-bit intermediates
@@ -171,8 +180,8 @@ pub fn link_instructions<'s, 'i>(
                     let ptr = add_imms(upper, imm);
                     *state = Loaded(dst, ptr);
 
-                    let lui_insn = Pointer(LinkedVal::new(ptr, prior));
-                    let lower_insn = Pointer(LinkedVal::new(ptr, offset));
+                    let lui_insn = Pointer(Link::new(ptr, prior));
+                    let lower_insn = Pointer(Link::new(ptr, offset));
                     Some(lui_insn.into_iter().chain(lower_insn))
                 }
                 // TODO: either calculate a new pointer, or reset state
@@ -191,8 +200,8 @@ pub fn link_instructions<'s, 'i>(
                     let val = or_imms(upper, imm);
                     *state = Loaded(dst, val);
 
-                    let lui_insn = Immediate(LinkedVal::new(val, prior));
-                    let lower_insn = Immediate(LinkedVal::new(val, offset));
+                    let lui_insn = Immediate(Link::new(val, prior));
+                    let lower_insn = Immediate(Link::new(val, offset));
                     Some(lui_insn.into_iter().chain(lower_insn))
                 }
                 // TODO: either calculate a new offset, or reset state
@@ -207,20 +216,20 @@ pub fn link_instructions<'s, 'i>(
                 .ok_or_else(|| MissingInsnComponent(insn.clone(), "mtc1 source reg"))?;
 
             if src.0 as u32 == MIPS_REG_ZERO {
-                let mtc1_zero = Float(LinkedVal::new(0, offset));
+                let mtc1_zero = Float(Link::new(0, offset));
                 return Ok(Some(mtc1_zero.into_iter().chain(Empty)));
             }
 
             Ok(reg_state.get_mut(&src).and_then(|state| match *state {
                 Upper(_reg, val, prior) => {
                     let val = (val as u32) << 16;
-                    let upper = Float(LinkedVal::new(val, prior));
-                    let mtc1 = Float(LinkedVal::new(val, offset));
+                    let upper = Float(Link::new(val, prior));
+                    let mtc1 = Float(Link::new(val, offset));
 
                     Some(upper.into_iter().chain(mtc1))
                 }
                 Loaded(_reg, val) => {
-                    let mtc1 = Float(LinkedVal::new(val, offset));
+                    let mtc1 = Float(Link::new(val, offset));
                     Some(mtc1.into_iter().chain(Empty))
                 }
             }))
@@ -238,12 +247,12 @@ pub fn link_instructions<'s, 'i>(
                     let ptr = add_imms(upper, imm);
                     *state = Loaded(reg, ptr);
 
-                    let lui = Pointer(LinkedVal::new(ptr, prior));
-                    let mem = Pointer(LinkedVal::new(ptr, prior));
+                    let lui = Pointer(Link::new(ptr, prior));
+                    let mem = Pointer(Link::new(ptr, prior));
                     Some(lui.into_iter().chain(mem))
                 }
                 Loaded(_reg, ptr) => {
-                    let mem = PtrOff(LinkedVal::new(ptr, offset), imm);
+                    let mem = PtrOff(Link::new(ptr, offset), imm);
                     Some(mem.into_iter().chain(Empty))
                 }
             }))

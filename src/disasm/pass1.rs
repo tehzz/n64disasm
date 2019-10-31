@@ -5,7 +5,7 @@ use crate::disasm::{mipsinsn::*, CodeBlock, Label};
 use arrayvec::ArrayString;
 use capstone::{arch::mips::MipsOperand, arch::mips::MipsReg::*, prelude::*, Insn};
 use err_derive::Error;
-use linkinsn::{link_instructions, LinkInsnErr, LinkState, LuiResolve};
+use linkinsn::{link_instructions, LinkInsnErr, LinkState, LinkedVal, Link};
 use std::collections::HashMap;
 use std::convert::TryInto;
 use std::fs::File;
@@ -79,11 +79,6 @@ pub fn pass1(config: Config, rom: &Path) -> Result<(), Pass1Error> {
             .try_fold(FoldInsnState::with_cap(num_insn), fold_instructions)?;
 
         println!("");
-        println!("Found linked values:");
-        for link in test.links.iter() {
-            println!("{:4}{}", "", link);
-        }
-        println!("");
         //println!("{:?}\n", &test);
     }
 
@@ -94,7 +89,6 @@ pub fn pass1(config: Config, rom: &Path) -> Result<(), Pass1Error> {
 struct FoldInsnState {
     instructions: Vec<Instruction>,
     link_state: LinkState,
-    links: Vec<LuiResolve>,
 }
 
 impl FoldInsnState {
@@ -102,25 +96,29 @@ impl FoldInsnState {
         Self {
             instructions: Vec::with_capacity(insn_size),
             link_state: LinkState::new(),
-            links: Vec::new(),
         }
     }
 }
 
 fn fold_instructions(
     mut state: FoldInsnState,
-    (offset, insn): (usize, Result<Instruction, Pass1Error>),
+    (offset, insn): (usize, Result<Instruction, Pass1Error>)
 ) -> Result<FoldInsnState, Pass1Error> {
     let insn = insn?;
-
-    if let Some(linked_values) = link_instructions(&mut state.link_state, &insn, offset)? {
-        state.links.extend(linked_values.filter(|l| !l.is_empty()));
-    }
+    let maybe_linked = link_instructions(&mut state.link_state, &insn, offset)?;
+    
     // TODO: fix "move" instructions (id 423)
-    //if &insn.mnemonic == "sw" {
-    //    println!("{:#?}", &insn);
-    //}
     state.instructions.push(insn);
+
+    if let Some(linked_values) = maybe_linked {
+        for link in linked_values.filter(|l| !l.is_empty()) {
+            let Link {value, instruction} = link.get_link().expect("no empty linked values");
+            
+            println!("{:4}@{:>5}: {}", "", instruction as isize - offset as isize, &link);
+            
+            state.instructions[instruction].linked = link;
+        }
+    }
 
     Ok(state)
 }
@@ -232,7 +230,7 @@ pub struct Instruction {
     operands: Vec<MipsOperand>,
     new_line: bool,
     jump: JumpKind,
-    //linked_insn: usize,
+    linked: LinkedVal,
 }
 
 impl Instruction {
@@ -259,6 +257,7 @@ impl Instruction {
                 .collect(),
             new_line: false,
             jump: JumpKind::from((insn, detail)),
+            linked: LinkedVal::Empty,
         })
     }
 }
