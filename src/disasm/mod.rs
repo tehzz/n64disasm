@@ -61,11 +61,49 @@ impl CodeBlock {
 }
 
 #[derive(Debug)]
+pub enum LabelKind {
+    Local,
+    Global,
+    Data,
+    Named(String),
+}
+
+#[derive(Debug)]
 pub struct Label {
     addr: u32,
-    symbol: String,
+    kind: LabelKind,
     /// None is a global symbol
     overlay: Option<Overlay>,
+}
+
+impl Label {
+    pub fn add_overlay(&mut self, ovl: Overlay) {
+        self.overlay = Some(ovl);
+    }
+
+    pub fn local(addr: u32) -> Self {
+        Self {
+            addr,
+            kind: LabelKind::Local,
+            overlay: None,
+        }
+    }
+
+    pub fn global(addr: u32) -> Self {
+        Self {
+            addr,
+            kind: LabelKind::Global,
+            overlay: None,
+        }
+    }
+
+    pub fn data(addr: u32) -> Self {
+        Self {
+            addr,
+            kind: LabelKind::Data,
+            overlay: None,
+        }
+    }
 }
 
 impl From<RawLabel> for Label {
@@ -74,10 +112,11 @@ impl From<RawLabel> for Label {
             RawLabel::Global(a, s) => (a, s, None),
             RawLabel::Overlayed(a, s, o) => (a, s, Some(o.into())),
         };
+        let kind = LabelKind::Named(symbol);
 
         Self {
             addr,
-            symbol,
+            kind,
             overlay,
         }
     }
@@ -112,9 +151,10 @@ impl LabelSet {
                         return Err(LabelSetError::UnknownOverlay(addr, symbol, ovl));
                     }
                     let overlay = Overlay::from(ovl);
+                    let kind = LabelKind::Named(symbol);
                     let label = Label {
                         addr,
-                        symbol,
+                        kind,
                         overlay: Some(overlay.clone()),
                     };
                     overlays
