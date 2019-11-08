@@ -1,6 +1,10 @@
 use capstone::arch::mips::MipsInsn::*;
 
 // Useful instructions from Capstone C enum
+pub const INS_MOVE: u32 = MIPS_INS_MOVE as u32;
+pub const INS_OR: u32 = MIPS_INS_OR as u32;
+pub const INS_ADDU: u32 = MIPS_INS_ADDU as u32;
+
 pub const INS_J: u32 = MIPS_INS_J as u32;
 pub const INS_JAL: u32 = MIPS_INS_JAL as u32;
 pub const INS_BAL: u32 = MIPS_INS_BAL as u32;

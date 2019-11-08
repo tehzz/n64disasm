@@ -1,4 +1,4 @@
-use crate::disasm::{mipsinsn::*, pass1::Instruction};
+use crate::disasm::{mipsvals::*, pass1::Instruction};
 use capstone::{arch::mips::MipsOperand, arch::mips::MipsReg::*, prelude::*};
 use err_derive::Error;
 use std::collections::HashMap;

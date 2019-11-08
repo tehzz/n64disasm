@@ -1,7 +1,8 @@
 mod linkinsn;
+mod labeling;
 
 use crate::config::Config;
-use crate::disasm::{mipsinsn::*, CodeBlock, Label, LabelSet};
+use crate::disasm::{mipsvals::*, CodeBlock, Label};
 use arrayvec::ArrayString;
 use capstone::{arch::mips::MipsOperand, arch::mips::MipsReg::*, prelude::*, Insn};
 use err_derive::Error;
@@ -12,6 +13,8 @@ use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
 
+use labeling::LabelState;
+
 pub use linkinsn::{Link, LinkedVal};
 
 #[derive(Debug, Error)]
@@ -20,10 +23,7 @@ pub enum Pass1Error {
     LinkInsn(#[error(source)] LinkInsnErr),
     #[error(display = "MIPS opcode mnemonic longer than 16 bytes: {}", _0)]
     LongMnem(String),
-    #[error(
-        display = "Expected a MIPS instruction of four bytes, received <{:x?}>",
-        _0
-    )]
+    #[error(display = "MIPS instruction not four bytes <{:x?}>", _0)]
     IllegalInsn(Vec<u8>, #[error(source)] ::std::array::TryFromSliceError),
     #[error(display = "Problem reading ROM in pass 1 disassembly")]
     Io(#[error(source)] ::std::io::Error),
@@ -66,13 +66,14 @@ pub fn pass1(config: Config, rom: &Path) -> Result<(), Pass1Error> {
         let num_insn = cs_instructions.len();
 
         println!("Found {} instructions in block '{}'", num_insn, &block.name);
+
         let block_size = block.rom_end - block.rom_start;
         let range = BlockRange::new(block.vaddr, block.vaddr + block_size);
         let label_state = LabelState::from_config(range, &config_labels, &block.name);
 
         let test = cs_instructions
             .iter()
-            .take(150)
+            .take(2000)
             .inspect(|i| println!("{}", i))
             .map(|i| {
                 let detail = cs.insn_detail(&i)?;
@@ -116,91 +117,6 @@ impl BlockRange {
     }
 }
 
-#[derive(Debug)]
-struct LabelState<'c> {
-    range: BlockRange,
-    config_global: &'c HashMap<u32, Label>,
-    config_ovl: Option<&'c HashMap<u32, Label>>,
-    internals: HashMap<u32, Label>,
-    externals: HashMap<u32, Label>, // subroutines or data that are not in the current block
-}
-
-impl<'c> LabelState<'c> {
-    fn from_config(range: BlockRange, set: &'c LabelSet, name: &'_ str) -> Self {
-        Self {
-            range,
-            config_global: &set.globals,
-            config_ovl: set.overlays.get(name),
-            internals: HashMap::new(),
-            externals: HashMap::new(),
-        }
-    }
-
-    /// extract a (possible) label from an instruction. This doesn't deal with
-    /// assigning an overlay to a label
-    /// Branch => local label
-    /// J => internal or external subroutine
-    /// Linked (Not float) => data label
-    fn check_instruction(&mut self, insn: &Instruction) {
-        use JumpKind::*;
-
-        match insn.jump {
-            Branch(addr) | BAL(addr) => self.insert_local(addr),
-            Jump(addr) | JAL(addr) => self.insert_subroutine(addr),
-            _ => (),
-        };
-    }
-
-    /// check if a given addr is contained within this state's memory range
-    fn is_in_config(&self, addr: u32) -> bool {
-        self.config_global.contains_key(&addr)
-            || self
-                .config_ovl
-                .map(|s| s.contains_key(&addr))
-                .unwrap_or(false)
-    }
-
-    /// check if a given addr is contained within this state's memory range
-    fn is_internal(&self, addr: u32) -> bool {
-        self.range.contains(addr)
-    }
-
-    fn insert_local(&mut self, addr: u32) {
-        if self.is_in_config(addr) {
-            return;
-        }
-
-        if !self.internals.contains_key(&addr) {
-            self.internals.insert(addr, Label::local(addr));
-        }
-    }
-    fn insert_subroutine(&mut self, addr: u32) {
-        if self.is_in_config(addr) {
-            return;
-        }
-
-        if self.is_internal(addr) {
-            if !self.internals.contains_key(&addr) {
-                self.internals.insert(addr, Label::global(addr));
-            }
-        } else if !self.externals.contains_key(&addr) {
-            self.externals.insert(addr, Label::global(addr));
-        }
-    }
-    fn insert_data(&mut self, addr: u32) {
-        if self.is_in_config(addr) {
-            return;
-        }
-
-        if self.is_internal(addr) {
-            if !self.internals.contains_key(&addr) {
-                self.internals.insert(addr, Label::data(addr));
-            }
-        } else if !self.externals.contains_key(&addr) {
-            self.externals.insert(addr, Label::data(addr));
-        }
-    }
-}
 
 #[derive(Debug)]
 struct FoldInsnState<'c> {
@@ -223,10 +139,11 @@ fn fold_instructions(
     mut state: FoldInsnState,
     (offset, insn): (usize, Result<Instruction, Pass1Error>),
 ) -> Result<FoldInsnState, Pass1Error> {
-    let insn = insn?;
+    let mut insn = insn?;
     let maybe_linked = link_instructions(&mut state.link_state, &insn, offset)?;
 
-    // TODO: fix "move" instructions (id 423)
+    // convert "move" instructions (id 423) back to `or` or `addu`    
+    fix_move(&mut insn);
     state.instructions.push(insn);
 
     if let Some(linked_values) = maybe_linked {
@@ -248,10 +165,38 @@ fn fold_instructions(
     let insn_ref = state
         .instructions
         .last()
-        .expect("Insn Vec should have 1+ isns");
+        .expect("Insn Vec should have >0 isns");
     state.label_state.check_instruction(insn_ref);
 
     Ok(state)
+}
+
+/// capstone `move d, s` instructions should be either an `or d, s, $zero`
+/// or an `addu d, s, $zero`. This converts the `Instruction` back
+fn fix_move(insn: &mut Instruction) {
+    if insn.id.0 != INS_MOVE { return; }
+    // MIPS `or` insn:       0000 00ss ssst tttt dddd d000 0010 0101  => 37
+    // MIPS 'addu' insn:     0000 00ss ssst tttt dddd d000 0010 0001  => 33
+    const INSN_MASK: u32 = 0b1111_1100_0000_0000_0000_0111_1111_1111;
+    
+    insn.mnemonic.clear();
+    match insn.raw & INSN_MASK {
+        33 => {
+            insn.id = InsnId(INS_ADDU);
+            insn.mnemonic.push_str("addu");
+        },
+        37 => {
+            insn.id = InsnId(INS_OR);
+            insn.mnemonic.push_str("or");
+        },
+        _ => panic!("Unknown 'move' instruction: {:08x}", insn.raw),
+    }
+
+    if let Some(ref mut op) = insn.op_str {
+        op.push_str(", $zero");
+    }
+    let zero_operand = MipsOperand::Reg(RegId(MIPS_REG_ZERO as u16));
+    insn.operands.push(zero_operand);
 }
 
 struct Block {
