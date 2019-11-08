@@ -1,30 +1,32 @@
-mod linkinsn;
+mod jumps;
 mod labeling;
+mod linkinsn;
 
 use crate::config::Config;
-use crate::disasm::{mipsvals::*, CodeBlock, Label};
-use arrayvec::ArrayString;
-use capstone::{arch::mips::MipsOperand, arch::mips::MipsReg::*, prelude::*, Insn};
+use crate::disasm::{
+    instruction::{InsnParseErr, Instruction},
+    mipsvals::*,
+    CodeBlock, Label,
+};
+use capstone::{arch::mips::MipsOperand, arch::mips::MipsReg::*, prelude::*};
 use err_derive::Error;
 use linkinsn::{link_instructions, LinkInsnErr, LinkState};
 use std::collections::HashMap;
-use std::convert::TryInto;
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
 
 use labeling::LabelState;
 
+pub use jumps::JumpKind;
 pub use linkinsn::{Link, LinkedVal};
 
 #[derive(Debug, Error)]
 pub enum Pass1Error {
     #[error(display = "Problem when attempting to combine constants")]
     LinkInsn(#[error(source)] LinkInsnErr),
-    #[error(display = "MIPS opcode mnemonic longer than 16 bytes: {}", _0)]
-    LongMnem(String),
-    #[error(display = "MIPS instruction not four bytes <{:x?}>", _0)]
-    IllegalInsn(Vec<u8>, #[error(source)] ::std::array::TryFromSliceError),
+    #[error(display = "Problem parsing capstone instruction")]
+    InsnParse(#[error(source)] InsnParseErr),
     #[error(display = "Problem reading ROM in pass 1 disassembly")]
     Io(#[error(source)] ::std::io::Error),
     #[error(display = "Problem with capstone disassembly")]
@@ -117,7 +119,6 @@ impl BlockRange {
     }
 }
 
-
 #[derive(Debug)]
 struct FoldInsnState<'c> {
     instructions: Vec<Instruction>,
@@ -137,12 +138,11 @@ impl<'c> FoldInsnState<'c> {
 
 fn fold_instructions(
     mut state: FoldInsnState,
-    (offset, insn): (usize, Result<Instruction, Pass1Error>),
+    (offset, insn): (usize, Result<Instruction, InsnParseErr>),
 ) -> Result<FoldInsnState, Pass1Error> {
     let mut insn = insn?;
     let maybe_linked = link_instructions(&mut state.link_state, &insn, offset)?;
 
-    // convert "move" instructions (id 423) back to `or` or `addu`    
     fix_move(&mut insn);
     state.instructions.push(insn);
 
@@ -174,21 +174,24 @@ fn fold_instructions(
 /// capstone `move d, s` instructions should be either an `or d, s, $zero`
 /// or an `addu d, s, $zero`. This converts the `Instruction` back
 fn fix_move(insn: &mut Instruction) {
-    if insn.id.0 != INS_MOVE { return; }
     // MIPS `or` insn:       0000 00ss ssst tttt dddd d000 0010 0101  => 37
     // MIPS 'addu' insn:     0000 00ss ssst tttt dddd d000 0010 0001  => 33
     const INSN_MASK: u32 = 0b1111_1100_0000_0000_0000_0111_1111_1111;
-    
+
+    if insn.id.0 != INS_MOVE {
+        return;
+    }
+
     insn.mnemonic.clear();
     match insn.raw & INSN_MASK {
         33 => {
             insn.id = InsnId(INS_ADDU);
             insn.mnemonic.push_str("addu");
-        },
+        }
         37 => {
             insn.id = InsnId(INS_OR);
             insn.mnemonic.push_str("or");
-        },
+        }
         _ => panic!("Unknown 'move' instruction: {:08x}", insn.raw),
     }
 
@@ -230,116 +233,4 @@ fn indicate_newlines(state: &mut NLState, mut insn: Instruction) -> Instruction 
     };
 
     insn
-}
-
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
-enum JumpKind {
-    None,
-    Branch(u32),
-    BAL(u32),
-    Jump(u32),
-    JAL(u32),
-    JumpRegister(RegId),
-}
-
-impl JumpKind {
-    fn is_jrra(&self) -> bool {
-        match self {
-            Self::JumpRegister(r) => r.0 as u32 == MIPS_REG_RA,
-            _ => false,
-        }
-    }
-}
-
-impl From<(&Insn<'_>, &InsnDetail<'_>)> for JumpKind {
-    fn from((insn, details): (&Insn, &InsnDetail)) -> Self {
-        use capstone::arch::mips::MipsInsnGroup::*;
-
-        // for some reason, the MIPS `j`,`jal`, `jalr`, etc. instructions are not in the jump group...
-        // in fact, they have no specific group of their own.
-        if !details.groups().any(|g| g.0 as u32 == MIPS_GRP_JUMP)
-            && insn.id().0 != INS_JAL
-            && insn.id().0 != INS_J
-        {
-            return Self::None;
-        }
-
-        let imm = details
-            .arch_detail()
-            .mips()
-            .expect("All decompiled instructions should be MIPS")
-            .operands()
-            .find_map(|op| match op {
-                MipsOperand::Imm(val) => Some(val as u32),
-                _ => None,
-            });
-
-        let reg = details
-            .arch_detail()
-            .mips()
-            .expect("All decompiled instructions should be MIPS")
-            .operands()
-            .find_map(|op| match op {
-                MipsOperand::Reg(r) => Some(r),
-                _ => None,
-            });
-
-        if let Some(imm) = imm {
-            match insn.id().0 {
-                INS_J => JumpKind::Jump(imm),
-                INS_JAL => JumpKind::JAL(imm),
-                INS_BAL => JumpKind::BAL(imm),
-                _ => JumpKind::Branch(imm),
-            }
-        } else if let Some(jr_target) = reg {
-            // catch `jr XX` and `jalr XX`, but I don't think they make it here
-            // do to the above noted issue with capstone
-            JumpKind::JumpRegister(jr_target)
-        } else {
-            unreachable!("Not all branch/jump types covered?");
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct Instruction {
-    id: capstone::InsnId,
-    vaddr: u32,
-    raw: u32,
-    // same size as an `(A)Rc<str>` on 64bit, but no indirection/thread issues
-    mnemonic: ArrayString<[u8; 16]>,
-    op_str: Option<String>,
-    operands: Vec<MipsOperand>,
-    new_line: bool,
-    jump: JumpKind,
-    linked: LinkedVal,
-}
-
-impl Instruction {
-    fn from_components(insn: &Insn, detail: &InsnDetail) -> Result<Self, Pass1Error> {
-        use Pass1Error::{IllegalInsn, LongMnem};
-
-        let mnemonic = insn.mnemonic().expect("MIPS Opcode Mnemonic");
-
-        Ok(Self {
-            id: insn.id(),
-            vaddr: insn.address() as u32,
-            raw: insn
-                .bytes()
-                .try_into()
-                .map(u32::from_be_bytes)
-                .map_err(|e| IllegalInsn(insn.bytes().to_vec(), e))?,
-            mnemonic: ArrayString::from(mnemonic).map_err(|_| LongMnem(mnemonic.to_string()))?,
-            op_str: insn.op_str().map(str::to_string),
-            operands: detail
-                .arch_detail()
-                .mips()
-                .expect("All decompiled instructions should be MIPS")
-                .operands()
-                .collect(),
-            new_line: false,
-            jump: JumpKind::from((insn, detail)),
-            linked: LinkedVal::Empty,
-        })
-    }
 }

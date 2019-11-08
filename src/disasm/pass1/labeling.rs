@@ -1,6 +1,9 @@
-use crate::disasm::pass1::{Instruction, BlockRange, JumpKind, linkinsn::{LinkedVal, Link}};
-use std::collections::HashMap;
+use crate::disasm::pass1::{
+    linkinsn::{Link, LinkedVal},
+    BlockRange, Instruction, JumpKind,
+};
 use crate::disasm::{Label, LabelSet};
+use std::collections::HashMap;
 
 /// The structure that collects addresses for labels as parsed instructions
 /// from capstone are folded at the end of pass1
@@ -14,7 +17,7 @@ pub struct LabelState<'c> {
 }
 
 impl<'c> LabelState<'c> {
-    /// Set up a new labeling state based on a block's memory range and known labels 
+    /// Set up a new labeling state based on a block's memory range and known labels
     /// passed in the from the configuration yaml file.
     pub fn from_config(range: BlockRange, set: &'c LabelSet, name: &'_ str) -> Self {
         Self {

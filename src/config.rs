@@ -103,7 +103,7 @@ fn block_iter(raw: Vec<RawCodeBlock>, kind: BlockKind) -> impl Iterator<Item = C
 
 /// Create a HashMap that links each overlay with all of its possible "paired" overlays.
 /// This map thus shows all possible code/data that a given overlay can see.
-/// Note that the paired set includes the "base" overlay itself.
+/// Note that the paired set includes the "main" overlay itself.
 fn create_overlay_map(
     sets: &HashMap<String, Vec<String>>,
     overlays: &HashSet<Overlay>,

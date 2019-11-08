@@ -1,3 +1,4 @@
+mod instruction;
 mod mipsvals;
 mod pass1;
 
@@ -77,8 +78,8 @@ pub struct Label {
 }
 
 impl Label {
-    pub fn add_overlay(&mut self, ovl: Overlay) {
-        self.overlay = Some(ovl);
+    pub fn add_overlay(&mut self, ovl: &Overlay) {
+        self.overlay = Some(ovl.clone());
     }
 
     pub fn local(addr: u32) -> Self {
