@@ -4,9 +4,9 @@
 ---
 # Always loaded code that is never overlayed
 static-code:
-  # [ romStart, romEnd, name, vaddr]
-  - [  0x1000, 0x406D0, system, 0x80000400]
-  - [ 0x406D0, 0x43220, overlayloader, 0x800a1980]
+  # [ romStart, romEnd, name, vaddr, noloadstart, noloadend ]
+  - [  0x1000, 0x406D0, system, 0x80000400] # 0x8003fad0, 0x800a1970
+  - [ 0x406D0, 0x43220, overlayloader, 0x800a1980] # 0x800a44d0, 0x800a5240
 
 # Overlays that other overlays assume to be loaded. These are 
 # set up by the overlay function itself

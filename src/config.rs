@@ -1,16 +1,25 @@
-use crate::disasm::{BlockKind, CodeBlock, LabelSet, LabelSetError, Overlay, OverlaySet};
+use crate::disasm::{BlockKind, CodeBlock, LabelSet, LabelSetErr, MemoryMap, MemoryMapErr};
 use err_derive::Error;
 use serde::Deserialize;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs::File;
 use std::path::Path;
 
-pub type RawCodeBlock = (u32, u32, String, u32);
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum RawCodeBlock {
+    // RomStart, RomEnd, Name, Vaddr
+    MissingNoload(u32, u32, String, u32),
+    // RomStart, RomEnd, Name, Vaddr, BssStart, BssEnd
+    Noload(u32, u32, String, u32, u32, u32),
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 pub enum RawLabel {
+    // addr, label
     Global(u32, String),
+    // addr, label, overlay
     Overlayed(u32, String, String),
 }
 
@@ -26,22 +35,18 @@ struct RawConfig {
 
 #[derive(Debug)]
 pub struct Config {
-    /// List of all code sections
-    pub blocks: Vec<CodeBlock>,
-    /// Set of all overlays
-    pub overlays: HashSet<Overlay>,
-    // map an overlay to all possible other overlays that could be loaded at the same time
-    pub overlay_map: OverlaySet,
+    /// The collection of code sections (text, data, and bss) mapped based on RAM location
+    pub memory: MemoryMap,
     /// Set of labels from config file, sorted into global and overlayed bins
     pub labels: LabelSet,
 }
 
 #[derive(Debug, Error)]
 pub enum ConfigParseError {
-    #[error(display = "Unknown Overlay \"{}\" in Overlay Set \"{}\"", _1, _0)]
-    SetUnkOverlay(String, String),
-    #[error(display = "Problem identifying labels in config YALM file")]
-    Label(#[error(source)] LabelSetError),
+    #[error(display = "Problem creating memory map from config YAML file")]
+    MemMap(#[error(source)] MemoryMapErr),
+    #[error(display = "Problem identifying labels in config YAML file")]
+    Label(#[error(source)] LabelSetErr),
     #[error(display = "Problem opening config YAML file")]
     Io(#[error(source)] ::std::io::Error),
     #[error(display = "Problem parsing the config YAML file")]
@@ -59,75 +64,16 @@ pub fn parse_config(p: &Path) -> Result<Config, ConfigParseError> {
     } = serde_yaml::from_reader(f)?;
 
     let total_blocks = static_code.len() + base_overlays.len() + overlays.len();
-    let total_overlays = base_overlays.len() + overlays.len();
+    let blocks_iter = make_block_iter(static_code, BlockKind::Global)
+        .chain(make_block_iter(base_overlays, BlockKind::BaseOverlay))
+        .chain(make_block_iter(overlays, BlockKind::Overlay));
 
-    let (blocks, overlays) = block_iter(static_code, BlockKind::Global)
-        .chain(block_iter(base_overlays, BlockKind::BaseOverlay))
-        .chain(block_iter(overlays, BlockKind::Overlay))
-        .fold(
-            (
-                Vec::with_capacity(total_blocks),
-                HashSet::with_capacity(total_overlays),
-            ),
-            |(mut b, mut o), block| {
-                match block.kind {
-                    BlockKind::BaseOverlay | BlockKind::Overlay => {
-                        // TODO: check for duplicate overlays and error
-                        o.insert(block.name.clone().into());
-                    }
-                    BlockKind::Global => (),
-                };
+    let memory = MemoryMap::from_config_parts(blocks_iter, total_blocks, overlay_sets)?;
+    let labels = LabelSet::from_raw_labels(labels, &memory.overlays)?;
 
-                b.push(block);
-
-                (b, o)
-            },
-        );
-
-    let overlay_map = create_overlay_map(&overlay_sets, &overlays)?;
-    let labels = LabelSet::from_raw_labels(labels, &overlays)?;
-
-    let config = Config {
-        blocks,
-        overlays,
-        labels,
-        overlay_map,
-    };
-
-    Ok(config)
+    Ok(Config { memory, labels })
 }
 
-fn block_iter(raw: Vec<RawCodeBlock>, kind: BlockKind) -> impl Iterator<Item = CodeBlock> {
+fn make_block_iter(raw: Vec<RawCodeBlock>, kind: BlockKind) -> impl Iterator<Item = CodeBlock> {
     raw.into_iter().map(move |b| CodeBlock::from_raw(b, kind))
-}
-
-/// Create a HashMap that links each overlay with all of its possible "paired" overlays.
-/// This map thus shows all possible code/data that a given overlay can see.
-/// Note that the paired set includes the "main" overlay itself.
-fn create_overlay_map(
-    sets: &HashMap<String, Vec<String>>,
-    overlays: &HashSet<Overlay>,
-) -> Result<OverlaySet, ConfigParseError> {
-    use ConfigParseError::SetUnkOverlay as UnkOvl;
-
-    let mut map = OverlaySet::with_capacity(overlays.len());
-    let mut buffer = Vec::with_capacity(overlays.len());
-    for (set_name, overlay_set) in sets {
-        for s in overlay_set {
-            let ovl = overlays
-                .get(s.as_str())
-                .ok_or_else(|| UnkOvl(set_name.clone(), s.clone()))?;
-            buffer.push(ovl.clone());
-        }
-
-        for ovl in buffer.iter().cloned() {
-            map.entry(ovl)
-                .or_insert_with(|| HashSet::new())
-                .extend(buffer.iter().cloned())
-        }
-
-        buffer.clear();
-    }
-
-    Ok(map)
 }
