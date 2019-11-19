@@ -69,7 +69,7 @@ pub fn parse_config(p: &Path) -> Result<Config, ConfigParseError> {
         .chain(make_block_iter(overlays, BlockKind::Overlay));
 
     let memory = MemoryMap::from_config_parts(blocks_iter, total_blocks, overlay_sets)?;
-    let labels = LabelSet::from_raw_labels(labels, &memory.overlays)?;
+    let labels = LabelSet::from_config(labels, &memory.overlays)?;
 
     Ok(Config { memory, labels })
 }

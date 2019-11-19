@@ -303,12 +303,17 @@ pub struct LabelSet {
 }
 
 impl LabelSet {
-    pub fn from_raw_labels(
-        raw: Vec<RawLabel>,
-        ovls: &HashSet<Overlay>,
-    ) -> Result<Self, LabelSetErr> {
+    pub fn from_config(raw: Vec<RawLabel>, ovls: &HashSet<Overlay>) -> Result<Self, LabelSetErr> {
+        let ovl_count = ovls.len();
+        // Create maps for global symbols (addr => label)
+        // and for overlay specific symbols (overlay => addr => label)
         let mut globals = HashMap::new();
-        let mut overlays = HashMap::new();
+        let mut overlays = ovls
+            .iter()
+            .fold(HashMap::with_capacity(ovl_count), |mut map, ovl| {
+                map.insert(ovl.clone(), HashMap::new());
+                map
+            });
 
         for raw_label in raw {
             match raw_label {
@@ -316,21 +321,12 @@ impl LabelSet {
                     let label = Label::from(raw_label);
                     globals.insert(label.addr, label);
                 }
-                RawLabel::Overlayed(addr, symbol, ovl) => {
-                    if !ovls.contains(ovl.as_str()) {
-                        return Err(LabelSetErr::UnknownOverlay(addr, symbol, ovl));
-                    }
-                    let overlay = Overlay::from(ovl);
-                    let kind = LabelKind::Named(symbol);
-                    let label = Label {
-                        addr,
-                        kind,
-                        overlay: Some(overlay.clone()),
-                    };
-                    overlays
-                        .entry(overlay)
-                        .or_insert_with(HashMap::new)
-                        .insert(label.addr, label);
+                RawLabel::Overlayed(addr, ref symbol, ref ovl) => {
+                    let ovl_labels = overlays.get_mut(ovl.as_str()).ok_or_else(|| {
+                        LabelSetErr::UnknownOverlay(addr, symbol.clone(), ovl.clone())
+                    })?;
+                    let label = Label::from(raw_label);
+                    ovl_labels.insert(label.addr, label);
                 }
             };
         }

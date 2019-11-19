@@ -6,12 +6,12 @@ use crate::config::Config;
 use crate::disasm::{
     instruction::{InsnParseErr, Instruction},
     mipsvals::*,
-    CodeBlock, Label,
+    CodeBlock, Label, LabelSet, Overlay,
 };
 use capstone::{arch::mips::MipsOperand, arch::mips::MipsReg::*, prelude::*};
 use err_derive::Error;
 use linkinsn::{link_instructions, LinkInsnErr, LinkState};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
@@ -33,54 +33,42 @@ pub enum Pass1Error {
     Capstone(#[error(source)] capstone::Error),
 }
 
-pub fn pass1(config: Config, rom: &Path) -> Result<(), Pass1Error> {
-    let Config {
-        memory: memory_map,
-        labels: config_labels,
-        ..
-    } = config;
-    let cs = Capstone::new()
+type P1Result<T> = Result<T, Pass1Error>;
+
+fn get_cs_instance() -> Result<Capstone, capstone::Error> {
+    Capstone::new()
         .mips()
         .detail(true)
         .mode(arch::mips::ArchMode::Mips64)
         .endian(capstone::Endian::Big)
-        .build()?;
+        .build()
+}
+
+pub fn pass1(config: Config, rom: &Path) -> P1Result<()> {
+    let Config {
+        memory: memory_map,
+        labels: mut config_labels,
+    } = config;
+    let cs = get_cs_instance()?;
 
     let mut rom = File::open(rom)?;
     let read_rom = |block| read_codeblock(block, &mut rom);
+    let proc_insns = |res| process_block(res, &config_labels, &cs);
 
-    for res in memory_map.blocks.iter().map(read_rom).take(5) {
-        let (block, buf) = res?;
-        let block_vaddr = block.range.get_text_vaddr() as u64;
-        let cs_instructions = cs.disasm_all(&buf, block_vaddr)?;
-        let num_insn = cs_instructions.len();
+    let labeled_blocks = memory_map
+        .blocks
+        .iter()
+        .map(read_rom)
+        .take(5)
+        .map(proc_insns)
+        .collect::<P1Result<Vec<_>>>()?;
 
-        println!("Found {} instructions in block '{}'", num_insn, &block.name);
-
-        let label_state = LabelState::from_config(block.range, &config_labels, &block.name);
-
-        let test = cs_instructions
-            .iter()
-            .take(2000)
-            .inspect(|i| println!("{}", i))
-            .map(|i| {
-                let detail = cs.insn_detail(&i)?;
-                Instruction::from_components(&i, &detail)
-            })
-            .scan(NLState::Clear, |s, res| {
-                Some(res.map(|i| indicate_newlines(s, i)))
-            })
-            .enumerate()
-            .try_fold(FoldInsnState::new(num_insn, label_state), fold_instructions)?;
-
-        println!("");
-        println!("internal:\n{:#x?}", &test.label_state.internals);
-        println!("external:\n{:#x?}", &test.label_state.externals);
-    }
+    combine_labels(&mut config_labels, &memory_map.overlays, labeled_blocks);
 
     Ok(())
 }
 
+/// Helper function to read a `CodeBlock`'s raw bytes from the ROM
 fn read_codeblock<'a>(
     block: &'a CodeBlock,
     rom: &mut File,
@@ -92,6 +80,52 @@ fn read_codeblock<'a>(
     rom.read_exact(&mut buf)?;
 
     Ok((block, buf))
+}
+
+fn process_block<'b>(
+    res: io::Result<(&'b CodeBlock, Vec<u8>)>,
+    labels: &'_ LabelSet,
+    cs: &'_ Capstone,
+) -> P1Result<LabeledBlock<'b>> {
+    let (block, buf) = res?;
+    let block_vaddr = block.range.get_text_vaddr() as u64;
+    let cs_instructions = cs.disasm_all(&buf, block_vaddr)?;
+    let num_insn = cs_instructions.len();
+
+    println!("Found {} instructions in block '{}'", num_insn, &block.name);
+
+    let label_state = LabelState::from_config(block.range, &labels, &block.name);
+
+    let FoldInsnState {
+        instructions,
+        label_state,
+        ..
+    } = cs_instructions
+        .iter()
+        .take(2000)
+        .inspect(|i| println!("{}", i))
+        .map(|i| {
+            let detail = cs.insn_detail(&i)?;
+            Instruction::from_components(&i, &detail)
+        })
+        .scan(NLState::Clear, |s, res| {
+            Some(res.map(|i| indicate_newlines(s, i)))
+        })
+        .enumerate()
+        .try_fold(FoldInsnState::new(num_insn, label_state), fold_instructions)?;
+
+    let LabelState {
+        internals: internal_labels,
+        externals: external_labels,
+        ..
+    } = label_state;
+
+    Ok(LabeledBlock {
+        instructions,
+        block,
+        internal_labels,
+        external_labels,
+    })
 }
 
 /* Symbol Name Resolution Ideas
@@ -114,6 +148,91 @@ fn read_codeblock<'a>(
         b) if not..?
 */
 
+fn combine_labels(
+    label_set: &mut LabelSet,
+    overlays: &HashSet<Overlay>,
+    blocks: Vec<LabeledBlock>,
+) {
+    let external_labeled_blocks = combine_internal_labels(label_set, overlays, blocks);
+}
+
+fn combine_internal_labels<'c>(
+    label_set: &mut LabelSet,
+    overlays: &HashSet<Overlay>,
+    blocks: Vec<LabeledBlock<'c>>,
+) -> Vec<ExternLabeledBlock<'c>> {
+    use super::BlockKind::*;
+
+    let output = Vec::with_capacity(blocks.len());
+
+    blocks
+        .into_iter()
+        .map(LabeledBlock::into_extern_labeled)
+        .fold(output, |mut acc, (block, internal_labels)| {
+            let block_name: &str = &block.block.name;
+
+            if let Some(ovl_labels) = label_set.overlays.get_mut(block_name) {
+                let overlay = overlays
+                    .get(block_name)
+                    .expect("Interned overlay name string");
+                let internal_iter = internal_labels.into_iter().map(|(addr, mut label)| {
+                    label.add_overlay(overlay);
+
+                    (addr, label)
+                });
+
+                ovl_labels.extend(internal_iter);
+                println!(
+                    "Added to known labels with {}\n{:#?}\n",
+                    &block_name, &ovl_labels
+                );
+            } else {
+                label_set.globals.extend(internal_labels);
+            }
+
+            acc.push(block);
+
+            acc
+        })
+}
+
+struct LabeledBlock<'c> {
+    instructions: Vec<Instruction>,
+    block: &'c CodeBlock,
+    internal_labels: HashMap<u32, Label>,
+    external_labels: HashMap<u32, Label>,
+}
+
+impl<'c> LabeledBlock<'c> {
+    fn into_extern_labeled(self) -> (ExternLabeledBlock<'c>, HashMap<u32, Label>) {
+        let Self {
+            instructions,
+            block,
+            internal_labels,
+            external_labels,
+        } = self;
+        (
+            ExternLabeledBlock {
+                instructions,
+                block,
+                external_labels,
+            },
+            internal_labels,
+        )
+    }
+}
+
+struct ExternLabeledBlock<'c> {
+    instructions: Vec<Instruction>,
+    block: &'c CodeBlock,
+    external_labels: HashMap<u32, Label>,
+}
+
+struct ProcessedBlock<'c> {
+    instructions: Vec<Instruction>,
+    block: &'c CodeBlock,
+}
+
 #[derive(Debug)]
 struct FoldInsnState<'c> {
     instructions: Vec<Instruction>,
@@ -134,7 +253,7 @@ impl<'c> FoldInsnState<'c> {
 fn fold_instructions(
     mut state: FoldInsnState,
     (offset, insn): (usize, Result<Instruction, InsnParseErr>),
-) -> Result<FoldInsnState, Pass1Error> {
+) -> P1Result<FoldInsnState> {
     let mut insn = insn?;
     let maybe_linked = link_instructions(&mut state.link_state, &insn, offset)?;
 
@@ -195,13 +314,6 @@ fn fix_move(insn: &mut Instruction) {
     }
     let zero_operand = MipsOperand::Reg(RegId(MIPS_REG_ZERO as u16));
     insn.operands.push(zero_operand);
-}
-
-struct Block {
-    instructions: Vec<Instruction>,
-    locals: HashMap<u32, Label>,
-    globals: HashMap<u32, Label>,
-    externals: HashMap<u32, Label>,
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
