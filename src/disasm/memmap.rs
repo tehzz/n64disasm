@@ -167,7 +167,6 @@ impl CodeBlock {
     }
 
     pub fn intersects(&self, other: &Self) -> bool {
-        println!("{:x?} intersect {:x?}", self, other);
         self.range.intersects(&other.range)
     }
 }
@@ -377,6 +376,8 @@ impl BlockRange {
 impl From<(u32, u32, u32)> for BlockRange {
     // from (rom, ram, size) for converting from config file
     fn from(textonly: (u32, u32, u32)) -> Self {
+        assert!(textonly.2 > 0);
+
         Self {
             rom_start: textonly.0,
             rom_end: textonly.0 + textonly.2,
@@ -391,6 +392,8 @@ impl From<(u32, u32, u32)> for BlockRange {
 impl From<(u32, u32, u32, u32, u32)> for BlockRange {
     // from (rom, ram, size, noload, noloadend) for converting from config file
     fn from(full: (u32, u32, u32, u32, u32)) -> Self {
+        assert!(full.3 < full.4);
+
         Self {
             rom_start: full.0,
             rom_end: full.0 + full.2,
@@ -399,5 +402,57 @@ impl From<(u32, u32, u32, u32, u32)> for BlockRange {
             bss_start: NonZeroU32::new(full.3),
             bss_end: NonZeroU32::new(full.4),
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn non_intersecting_blocks() {
+        let block1 = BlockRange::from((0, 0x00, 0x400));
+        let block2 = BlockRange::from((0, 0x400, 0x1000));
+
+        assert!(
+            !block1.intersects(&block2),
+            "Blocks should not intersect even if one ends where another begins"
+        );
+
+        let block1bss = BlockRange::from((0, 0x00, 0x400, 0x2000, 0x2200));
+        let block2bss = BlockRange::from((0, 0x400, 0x1000, 0x2200, 0x22A0));
+
+        assert!(
+            !block1bss.intersects(&block2bss),
+            "Blocks including BSS should not intersect even if one ends where another begins"
+        );
+    }
+    #[test]
+    fn intersecting_blocks() {
+        let block1 = BlockRange::from((0, 0x00, 0x400));
+        let block2 = BlockRange::from((0, 0x200, 0x1000));
+
+        assert!(
+            block1.intersects(&block2),
+            "Blocks with overlapping RAM areas should intersect"
+        );
+
+        let block1bss = BlockRange::from((0, 0x00, 0x400, 0x2000, 0x2200));
+        let block2bss = BlockRange::from((0, 0x400, 0x1000, 0x2000, 0x22A0));
+
+        assert!(
+            block1bss.intersects(&block2bss),
+            "Blocks with overlapping BSS areas should intersect"
+        );
+    }
+    #[test]
+    #[should_panic]
+    fn panic_on_zero_sized_ram_range() {
+        BlockRange::from((0, 0x100, 0x000));
+    }
+    #[test]
+    #[should_panic]
+    fn panic_on_negative_bss_range() {
+        BlockRange::from((0, 0x00, 0x400, 0x100, 0x080));
     }
 }
