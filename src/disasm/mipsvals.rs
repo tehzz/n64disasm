@@ -1,4 +1,6 @@
 use capstone::arch::mips::MipsInsn::*;
+use capstone::arch::mips::MipsReg::*;
+use capstone::RegId;
 
 // Useful instructions from Capstone C enum
 pub const INS_MOVE: u32 = MIPS_INS_MOVE as u32;
@@ -33,3 +35,40 @@ pub const INS_LWC3: u32 = MIPS_INS_LWC3 as u32;
 pub const INS_SWC1: u32 = MIPS_INS_SWC1 as u32;
 pub const INS_SWC2: u32 = MIPS_INS_SWC2 as u32;
 pub const INS_SWC3: u32 = MIPS_INS_SWC3 as u32;
+
+// Callee Saved Registers
+pub const CALLEE_SAVED_REGS: [RegId; 10] = [
+    RegId(MIPS_REG_GP as u16),
+    RegId(MIPS_REG_S0 as u16),
+    RegId(MIPS_REG_S1 as u16),
+    RegId(MIPS_REG_S2 as u16),
+    RegId(MIPS_REG_S3 as u16),
+    RegId(MIPS_REG_S4 as u16),
+    RegId(MIPS_REG_S5 as u16),
+    RegId(MIPS_REG_S6 as u16),
+    RegId(MIPS_REG_S7 as u16),
+    RegId(MIPS_REG_S8 as u16),
+];
+
+// Caller Saved Registers (ignoring r0, k0, k1)
+pub const CALLER_SAVED_REGS: [RegId; 19] = [
+    RegId(MIPS_REG_AT as u16),
+    RegId(MIPS_REG_T0 as u16),
+    RegId(MIPS_REG_T1 as u16),
+    RegId(MIPS_REG_T2 as u16),
+    RegId(MIPS_REG_T3 as u16),
+    RegId(MIPS_REG_T4 as u16),
+    RegId(MIPS_REG_T5 as u16),
+    RegId(MIPS_REG_T6 as u16),
+    RegId(MIPS_REG_T7 as u16),
+    RegId(MIPS_REG_T8 as u16),
+    RegId(MIPS_REG_T9 as u16),
+    RegId(MIPS_REG_V0 as u16),
+    RegId(MIPS_REG_V1 as u16),
+    RegId(MIPS_REG_A0 as u16),
+    RegId(MIPS_REG_A1 as u16),
+    RegId(MIPS_REG_A2 as u16),
+    RegId(MIPS_REG_A3 as u16),
+    RegId(MIPS_REG_SP as u16),
+    RegId(MIPS_REG_RA as u16),
+];

@@ -5,8 +5,9 @@ mod linkinsn;
 use crate::config::Config;
 use crate::disasm::{
     instruction::{InsnParseErr, Instruction},
+    memmap::{AddrLocation, BlockName, CodeBlock, MemoryMap},
     mipsvals::*,
-    CodeBlock, Label, LabelSet, Overlay,
+    Label, LabelSet,
 };
 use capstone::{arch::mips::MipsOperand, arch::mips::MipsReg::*, prelude::*};
 use err_derive::Error;
@@ -63,7 +64,7 @@ pub fn pass1(config: Config, rom: &Path) -> P1Result<()> {
         .map(proc_insns)
         .collect::<P1Result<Vec<_>>>()?;
 
-    combine_labels(&mut config_labels, &memory_map.overlays, labeled_blocks);
+    combine_labels(&mut config_labels, &memory_map, labeled_blocks);
 
     Ok(())
 }
@@ -148,33 +149,105 @@ fn process_block<'b>(
         b) if not..?
 */
 
-fn combine_labels(
+fn combine_labels(label_set: &mut LabelSet, memory_map: &MemoryMap, blocks: Vec<LabeledBlock>) {
+    let external_labeled_blocks = combine_internal_labels(label_set, &memory_map.overlays, blocks);
+    let (final_blocks, unresolved) =
+        combine_unique_external_labels(label_set, memory_map, external_labeled_blocks);
+
+    println!("\nUnresolved Labels:");
+    for block in unresolved {
+        println!("{:#x?}\n", block);
+    }
+}
+
+fn combine_unique_external_labels<'c>(
     label_set: &mut LabelSet,
-    overlays: &HashSet<Overlay>,
-    blocks: Vec<LabeledBlock>,
-) {
-    let external_labeled_blocks = combine_internal_labels(label_set, overlays, blocks);
+    memory_map: &MemoryMap,
+    blocks: Vec<ExternLabeledBlock<'c>>,
+) -> (Vec<ProcessedBlock<'c>>, Vec<UnresolvedBlockLabels<'c>>) {
+    use AddrLocation::*;
+
+    let mut output_blocks = Vec::with_capacity(blocks.len());
+    let mut unresolved_blocks = Vec::with_capacity(blocks.len());
+
+    for block in blocks {
+        let (proc_block, external_labels) = block.into_proc_block();
+        let block_name = &proc_block.block.name;
+        let mut unresolved = UnresolvedBlockLabels::new(block_name);
+
+        for (addr, label) in external_labels {
+            match memory_map.get_addr_location(addr, block_name) {
+                NotFound => unresolved
+                    .not_found
+                    .get_or_insert_with(Vec::new)
+                    .push(label),
+                Multiple(hits) => unresolved
+                    .multiple
+                    .get_or_insert_with(Vec::new)
+                    .push((label, hits)),
+                Single(ovl) => {
+                    if let Some(ovl_labels) = label_set.overlays.get_mut(&ovl) {
+                        let mut label = label;
+                        label.add_overlay(&ovl);
+                        println!(
+                            "Found single overlay from '{}' in '{}': {:?}",
+                            &block_name, &ovl, &label
+                        );
+                        ovl_labels.insert(addr, label);
+                    } else {
+                        // must be a label from a global symbol
+                        println!(
+                            "Found global label from '{}' in '{}': {:x?}",
+                            &block_name, &ovl, &label
+                        );
+                        label_set.globals.insert(addr, label);
+                    }
+                }
+            }
+        }
+        output_blocks.push(proc_block);
+        unresolved_blocks.push(unresolved);
+    }
+
+    (output_blocks, unresolved_blocks)
+}
+
+/// Hold any `Label`s that couldn't be found or resolved into a single overlay.
+/// The label originates from `block`
+#[derive(Debug)]
+struct UnresolvedBlockLabels<'c> {
+    block: &'c BlockName,
+    not_found: Option<Vec<Label>>,
+    multiple: Option<Vec<(Label, Vec<BlockName>)>>,
+}
+
+impl<'c> UnresolvedBlockLabels<'c> {
+    fn new(block: &'c BlockName) -> Self {
+        Self {
+            block,
+            not_found: None,
+            multiple: None,
+        }
+    }
 }
 
 fn combine_internal_labels<'c>(
     label_set: &mut LabelSet,
-    overlays: &HashSet<Overlay>,
+    overlays: &HashSet<BlockName>,
     blocks: Vec<LabeledBlock<'c>>,
 ) -> Vec<ExternLabeledBlock<'c>> {
-    use super::BlockKind::*;
-
     let output = Vec::with_capacity(blocks.len());
 
     blocks
         .into_iter()
         .map(LabeledBlock::into_extern_labeled)
-        .fold(output, |mut acc, (block, internal_labels)| {
-            let block_name: &str = &block.block.name;
+        .fold(output, |mut acc, (extrn_block, internal_labels)| {
+            let block_name: &str = &extrn_block.block.name;
 
             if let Some(ovl_labels) = label_set.overlays.get_mut(block_name) {
                 let overlay = overlays
                     .get(block_name)
-                    .expect("Interned overlay name string");
+                    .expect("interned overlay name string");
                 let internal_iter = internal_labels.into_iter().map(|(addr, mut label)| {
                     label.add_overlay(overlay);
 
@@ -182,15 +255,11 @@ fn combine_internal_labels<'c>(
                 });
 
                 ovl_labels.extend(internal_iter);
-                println!(
-                    "Added to known labels with {}\n{:#?}\n",
-                    &block_name, &ovl_labels
-                );
             } else {
                 label_set.globals.extend(internal_labels);
             }
 
-            acc.push(block);
+            acc.push(extrn_block);
 
             acc
         })
@@ -226,6 +295,23 @@ struct ExternLabeledBlock<'c> {
     instructions: Vec<Instruction>,
     block: &'c CodeBlock,
     external_labels: HashMap<u32, Label>,
+}
+
+impl<'c> ExternLabeledBlock<'c> {
+    fn into_proc_block(self) -> (ProcessedBlock<'c>, HashMap<u32, Label>) {
+        let Self {
+            instructions,
+            block,
+            external_labels,
+        } = self;
+        (
+            ProcessedBlock {
+                instructions,
+                block,
+            },
+            external_labels,
+        )
+    }
 }
 
 struct ProcessedBlock<'c> {

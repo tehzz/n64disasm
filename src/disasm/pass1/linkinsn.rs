@@ -112,9 +112,12 @@ enum LuiState {
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 enum DelaySlot {
     Inactive,
-    Queued,
-    DelaySlot,
-    Resummed,
+    QueuedReturn,
+    DelayReturn,
+    NewRoutine,
+    QueuedCall,
+    DelayCall,
+    BackFromCall,
 }
 
 impl DelaySlot {
@@ -122,9 +125,12 @@ impl DelaySlot {
     fn tick_pc(&self) -> Self {
         match self {
             Self::Inactive => Self::Inactive,
-            Self::Queued => Self::DelaySlot,
-            Self::DelaySlot => Self::Resummed,
-            Self::Resummed => Self::Inactive,
+            Self::QueuedReturn => Self::DelayReturn,
+            Self::DelayReturn => Self::NewRoutine,
+            Self::NewRoutine => Self::Inactive,
+            Self::QueuedCall => Self::DelayCall,
+            Self::DelayCall => Self::BackFromCall,
+            Self::BackFromCall => Self::Inactive,
         }
     }
 }
@@ -145,15 +151,22 @@ pub fn link_instructions<'s, 'i>(
     let delay = &mut state.pc_delay_slot;
     let reg_state = &mut state.registers;
 
-    // reset register state on subroutine exit
+    // reset register state on subroutine exit or when calling subroutine
     *delay = delay.tick_pc();
 
-    if *delay == DelaySlot::Resummed {
-        reg_state.clear();
-    }
+    match delay {
+        DelaySlot::NewRoutine => reg_state.clear(),
+        DelaySlot::BackFromCall => reset_temp_reg(reg_state),
+        _ => (),
+    };
 
     if insn.jump.is_jrra() {
-        *delay = DelaySlot::Queued;
+        *delay = DelaySlot::QueuedReturn;
+        return Ok(None);
+    }
+
+    if insn.jump.is_jal() {
+        *delay = DelaySlot::QueuedCall;
         return Ok(None);
     }
 
@@ -258,6 +271,13 @@ pub fn link_instructions<'s, 'i>(
             }))
         }
         _ => Ok(None), // or, check if register is overwritten?
+    }
+}
+
+// Reset the caller saved registers when calling a subroutine
+fn reset_temp_reg(state: &mut HashMap<RegId, LuiState>) {
+    for reg in CALLER_SAVED_REGS.iter() {
+        state.remove(reg);
     }
 }
 

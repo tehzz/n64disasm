@@ -22,6 +22,13 @@ impl JumpKind {
             _ => false,
         }
     }
+
+    pub fn is_jal(&self) -> bool {
+        match self {
+            Self::JAL(_) => true,
+            _ => false,
+        }
+    }
 }
 
 impl From<(&Insn<'_>, &InsnDetail<'_>)> for JumpKind {

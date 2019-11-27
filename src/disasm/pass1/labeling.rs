@@ -1,8 +1,9 @@
+use crate::disasm::memmap::BlockRange;
 use crate::disasm::pass1::{
     linkinsn::{Link, LinkedVal},
     Instruction, JumpKind,
 };
-use crate::disasm::{BlockRange, Label, LabelSet};
+use crate::disasm::{Label, LabelSet};
 use std::collections::HashMap;
 
 /// The structure that collects addresses for labels as parsed instructions
