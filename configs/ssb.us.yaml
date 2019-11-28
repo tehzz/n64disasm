@@ -90,6 +90,9 @@ overlay-sets:
   # Set Name: [overlay1, overlay2, ...]
   N64Logo: [ ovl11 ]
   TitleScreen: [ ovl2, ovl10, ovl8, ovl9 ]
+  DebugStageSelect: [ ovl12, ovl8, ovl9 ]
+  DebugSystem: [ ovl2, ovl13, ovl8, ovl9 ]
+  DebugBattle: [ ovl2, ovl1, ovl14, ovl8, ovl9 ]
 
 # Global labels for functions based on vram address
 labels:
