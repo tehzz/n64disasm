@@ -1,5 +1,5 @@
 mod jumps;
-mod labeling;
+mod findlabels;
 mod linkinsn;
 
 use crate::config::Config;
@@ -17,7 +17,7 @@ use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
 
-use labeling::LabelState;
+use findlabels::LabelState;
 
 pub use jumps::JumpKind;
 pub use linkinsn::{Link, LinkedVal};
