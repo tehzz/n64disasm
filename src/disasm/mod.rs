@@ -10,64 +10,116 @@ use std::collections::{HashMap, HashSet};
 
 pub use pass1::pass1;
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum LabelKind {
+    // branch target, typically
     Local,
-    GlobalRoutine,
+    // subroutine start, typically
+    Routine,
     Data,
+    // named label from input config file
     Named(String),
+}
+
+#[derive(Debug)]
+enum LabelLoc {
+    // Initial state of a label
+    Unspecified,
+    // label is in a global memory location (always loaded and singularly mapped to an address)
+    Global,
+    // label is in one overlayed memory location (not always loaded)
+    Overlayed(BlockName),
+    // label matches locations of found labels in mutliple overlays
+    Multiple(Vec<BlockName>),
+    // label's location is within the memory region that could map to multiple overlays
+    UnresolvedMultiple(Vec<BlockName>),
+    // label doesn't map into any known memory region. Could be
+    NotFound,
+}
+
+impl From<Option<&BlockName>> for LabelLoc {
+    fn from(block: Option<&BlockName>) -> Self {
+        block
+            .map(|name| LabelLoc::Overlayed(name.clone()))
+            .unwrap_or(LabelLoc::Unspecified)
+    }
 }
 
 #[derive(Debug)]
 pub struct Label {
     addr: u32,
     kind: LabelKind,
-    /// None is a global symbol
-    overlay: Option<BlockName>,
+    location: LabelLoc,
 }
 
 impl Label {
-    pub fn add_overlay(&mut self, ovl: &BlockName) {
-        self.overlay = Some(ovl.clone());
+    pub fn set_overlay(&mut self, ovl: &BlockName) {
+        self.location = LabelLoc::Overlayed(ovl.clone());
     }
 
-    pub fn local(addr: u32) -> Self {
+    pub fn set_global(&mut self) {
+        self.location = LabelLoc::Global;
+    }
+
+    pub fn set_not_found(&mut self) {
+        self.location = LabelLoc::NotFound;
+    }
+
+    pub fn set_unresolved(&mut self, blocks: Vec<BlockName>) {
+        self.location = LabelLoc::UnresolvedMultiple(blocks);
+    }
+
+    pub fn set_multiple(&mut self, blocks: Vec<BlockName>) {
+        self.location = LabelLoc::Multiple(blocks);
+    }
+
+    pub fn get_possible_blocks(&self) -> Option<&[BlockName]> {
+        match &self.location {
+            LabelLoc::Multiple(blocks) => Some(&blocks),
+            LabelLoc::UnresolvedMultiple(blocks) => Some(&blocks),
+            _ => None,
+        }
+    }
+
+    pub fn local(addr: u32, ovl: Option<&BlockName>) -> Self {
         Self {
             addr,
             kind: LabelKind::Local,
-            overlay: None,
+            location: ovl.into(),
         }
     }
 
-    pub fn global(addr: u32) -> Self {
+    pub fn routine(addr: u32, ovl: Option<&BlockName>) -> Self {
         Self {
             addr,
-            kind: LabelKind::GlobalRoutine,
-            overlay: None,
+            kind: LabelKind::Routine,
+            location: ovl.into(),
         }
     }
 
-    pub fn data(addr: u32) -> Self {
+    pub fn data(addr: u32, ovl: Option<&BlockName>) -> Self {
         Self {
             addr,
             kind: LabelKind::Data,
-            overlay: None,
+            location: ovl.into(),
         }
     }
 }
 
 impl From<RawLabel> for Label {
     fn from(r: RawLabel) -> Self {
-        let (addr, symbol, overlay) = match r {
-            RawLabel::Global(a, s) => (a, s, None),
-            RawLabel::Overlayed(a, s, o) => (a, s, Some(o.into())),
+        use LabelLoc::{Overlayed, Unspecified};
+
+        let (addr, symbol, location) = match r {
+            RawLabel::Global(a, s) => (a, s, Unspecified),
+            RawLabel::Overlayed(a, s, o) => (a, s, Overlayed(o.into())),
         };
         let kind = LabelKind::Named(symbol);
 
         Self {
             addr,
             kind,
-            overlay,
+            location,
         }
     }
 }

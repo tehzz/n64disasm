@@ -66,6 +66,8 @@ pub struct MemoryMap {
     overlay_set_cache: HashMap<BlockName, Vec<usize>>,
     /// Map between block name and index of `blocks` array
     block_map: HashMap<BlockName, usize>,
+    /// Cache of all global/always loaded static block indices into `blocks` array
+    static_blocks: Vec<usize>,
 }
 
 impl MemoryMap {
@@ -90,24 +92,33 @@ impl MemoryMap {
             ..
         } = parsed_config;
 
+        let static_blocks = blocks
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| b.kind == BlockKind::Global)
+            .map(|(i, _)| i)
+            .collect();
+
         Ok(Self {
             blocks,
             overlays,
             overlay_sets,
             overlay_set_cache,
             block_map,
+            static_blocks,
         })
     }
 
     pub fn get_addr_location(&self, addr: u32, block: &str) -> AddrLocation {
         let hits: Vec<BlockName> = if let Some(cached_idx) = self.overlay_set_cache.get(block) {
             self.iter_set_blocks(&cached_idx)
+                .chain(self.iter_static_blocks())
                 .filter(|block| block.range.contains(addr))
                 .map(|block| block.name.clone())
                 .collect()
         } else {
             // This addr comes from a block that was not in an overlay set
-            // so, probably a global static block
+            // so, the address probably originates in a static block. It could call anywhere...
             self.blocks
                 .iter()
                 .filter(|block| block.range.contains(addr))
@@ -117,6 +128,11 @@ impl MemoryMap {
 
         AddrLocation::from(hits)
     }
+
+    pub fn get_block(&self, name: &BlockName) -> Option<&CodeBlock> {
+        self.block_map.get(name).map(move |&i| &self.blocks[i])
+    }
+
     /// Convert a slice of indices from `overlay_set_cache` into an iterator
     /// of that overlay set's code blocks
     fn iter_set_blocks<'m>(
@@ -124,6 +140,13 @@ impl MemoryMap {
         block_idx: &'m [usize],
     ) -> impl Iterator<Item = &CodeBlock> + 'm {
         block_idx.into_iter().copied().map(move |i| &self.blocks[i])
+    }
+    /// An iterator over just the static/always loaded blocks in this memory map
+    fn iter_static_blocks<'m>(&'m self) -> impl Iterator<Item = &CodeBlock> + 'm {
+        self.static_blocks
+            .iter()
+            .copied()
+            .map(move |i| &self.blocks[i])
     }
 }
 
@@ -135,10 +158,10 @@ pub enum AddrLocation {
 }
 
 impl From<Vec<BlockName>> for AddrLocation {
-    fn from(hits: Vec<BlockName>) -> Self {
+    fn from(mut hits: Vec<BlockName>) -> Self {
         match hits.len() {
             0 => Self::NotFound,
-            1 => Self::Single(hits[0].clone()),
+            1 => Self::Single(hits.pop().unwrap()),
             _ => Self::Multiple(hits),
         }
     }
@@ -232,9 +255,9 @@ fn create_base_ovl_set(info: &FoldBlockAcc) -> OverlaySet {
     info.base_ovls
         .iter()
         .map(|base| {
-            let base_block = dbg!(info
+            let base_block = info
                 .name_to_block(base)
-                .expect("Base overlay is already a known valid code block"));
+                .expect("Base overlay is already a known valid code block");
 
             (
                 base.clone(),

@@ -12,7 +12,7 @@ use crate::disasm::{
 use capstone::{arch::mips::MipsOperand, arch::mips::MipsReg::*, prelude::*};
 use err_derive::Error;
 use linkinsn::{link_instructions, LinkInsnErr, LinkState};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
@@ -60,7 +60,6 @@ pub fn pass1(config: Config, rom: &Path) -> P1Result<()> {
         .blocks
         .iter()
         .map(read_rom)
-        .take(5)
         .map(proc_insns)
         .collect::<P1Result<Vec<_>>>()?;
 
@@ -95,7 +94,7 @@ fn process_block<'b>(
 
     println!("Found {} instructions in block '{}'", num_insn, &block.name);
 
-    let label_state = LabelState::from_config(block.range, &labels, &block.name);
+    let label_state = LabelState::from_config(&block.range, &labels, &block.name);
 
     let FoldInsnState {
         instructions,
@@ -103,8 +102,8 @@ fn process_block<'b>(
         ..
     } = cs_instructions
         .iter()
-        .take(2000)
-        .inspect(|i| println!("{}", i))
+        //.take(5000)
+        //.inspect(|i| println!("{}", i))
         .map(|i| {
             let detail = cs.insn_detail(&i)?;
             Instruction::from_components(&i, &detail)
@@ -150,14 +149,27 @@ fn process_block<'b>(
 */
 
 fn combine_labels(label_set: &mut LabelSet, memory_map: &MemoryMap, blocks: Vec<LabeledBlock>) {
-    let external_labeled_blocks = combine_internal_labels(label_set, &memory_map.overlays, blocks);
-    let (final_blocks, unresolved) =
+    let external_labeled_blocks = combine_internal_labels(label_set, blocks);
+    let (final_blocks, unresolved_labels) =
         combine_unique_external_labels(label_set, memory_map, external_labeled_blocks);
 
     println!("\nUnresolved Labels:");
-    for block in unresolved {
-        println!("{:#x?}\n", block);
+    let mut total = 0;
+    for mut unresolved_labels in unresolved_labels {
+        let new_unres = unresolved_labels
+            .multiple
+            .as_ref()
+            .map(Vec::len)
+            .unwrap_or(0);
+        total += new_unres;
+
+        println!(
+            "Found {:?} unresolved multi-block lables in {}",
+            new_unres, unresolved_labels.block
+        );
+        unresolved_labels.resolve_multi_labels(label_set);
     }
+    println!("Total unresolved multi-block: {}", total);
 }
 
 fn combine_unique_external_labels<'c>(
@@ -175,30 +187,32 @@ fn combine_unique_external_labels<'c>(
         let block_name = &proc_block.block.name;
         let mut unresolved = UnresolvedBlockLabels::new(block_name);
 
-        for (addr, label) in external_labels {
+        println!("First pass on external labels for {}", &block_name);
+        for (addr, mut label) in external_labels {
             match memory_map.get_addr_location(addr, block_name) {
-                NotFound => unresolved
-                    .not_found
-                    .get_or_insert_with(Vec::new)
-                    .push(label),
-                Multiple(hits) => unresolved
-                    .multiple
-                    .get_or_insert_with(Vec::new)
-                    .push((label, hits)),
+                NotFound => unresolved.not_found.get_or_insert_with(Vec::new).push({
+                    label.set_not_found();
+                    label
+                }),
+                Multiple(hits) => unresolved.multiple.get_or_insert_with(Vec::new).push({
+                    label.set_unresolved(hits);
+                    label
+                }),
                 Single(ovl) => {
+                    // check if label already exists before inserting...?
                     if let Some(ovl_labels) = label_set.overlays.get_mut(&ovl) {
-                        let mut label = label;
-                        label.add_overlay(&ovl);
+                        label.set_overlay(&ovl);
                         println!(
-                            "Found single overlay from '{}' in '{}': {:?}",
-                            &block_name, &ovl, &label
+                            "{:4}Found single overlay from '{}' into '{}': {:?}",
+                            "", &block_name, &ovl, &label
                         );
                         ovl_labels.insert(addr, label);
                     } else {
                         // must be a label from a global symbol
+                        label.set_global();
                         println!(
-                            "Found global label from '{}' in '{}': {:x?}",
-                            &block_name, &ovl, &label
+                            "{:4}Found global label from '{}' into '{}': {:x?}",
+                            "", &block_name, &ovl, &label
                         );
                         label_set.globals.insert(addr, label);
                     }
@@ -218,7 +232,7 @@ fn combine_unique_external_labels<'c>(
 struct UnresolvedBlockLabels<'c> {
     block: &'c BlockName,
     not_found: Option<Vec<Label>>,
-    multiple: Option<Vec<(Label, Vec<BlockName>)>>,
+    multiple: Option<Vec<Label>>,
 }
 
 impl<'c> UnresolvedBlockLabels<'c> {
@@ -229,11 +243,72 @@ impl<'c> UnresolvedBlockLabels<'c> {
             multiple: None,
         }
     }
+
+    fn resolve_multi_labels(&mut self, label_set: &mut LabelSet) {
+        // check the blocks that the label could be in (based on address only)
+        // to see if there is already a known label
+        let find_label_already_in_blocks = |label: Label| {
+            let found_label_in = label
+                .get_possible_blocks()
+                .expect("only called on a label with multiple possible block locations")
+                .iter()
+                .filter(|name| {
+                    label_set
+                        .overlays
+                        .get(*name)
+                        .and_then(|lbs| lbs.get(&label.addr))
+                        .map(|found_label| label.kind == found_label.kind)
+                        .unwrap_or(false)
+                })
+                .cloned()
+                .collect::<Vec<BlockName>>();
+            (label, found_label_in)
+        };
+
+        // Generate a new `Vec` of possible locations for `label`, if the label
+        // was found to already be in other locations by `find_label_already_in_blocks`
+        let fold_new_multilabels =
+            |mut acc: Vec<Label>, (mut label, new_found): (Label, Vec<BlockName>)| {
+                println!(
+                    "{:4}Found label {:08x} in {:x?}",
+                    "", label.addr, &new_found
+                );
+                println!("{:8}Used to be in {:x?}", "", &label.location);
+
+                // Set Label.location here ?
+                match new_found.len() {
+                    // `label` was not in any other blocks, so can't reduce possibilities
+                    // The label already is tied to the `Vec` of possible blocks; nothing to do
+                    0 => (),
+                    // `label` is already present in exactly one other block; nothing to do
+                    1 => (),
+                    // A matching `Label` was found in >1 other blocks. Reduce the possibilites
+                    // for this label
+                    _ => {
+                        label.set_multiple(new_found);
+                        acc.push(label);
+                    }
+                }
+
+                acc
+            };
+
+        if let Some(multiple) = self.multiple.take() {
+            let max = multiple.len();
+
+            println!("Resolving multi-block labels from {}", self.block);
+            let fitlered_mutliple = multiple
+                .into_iter()
+                .map(find_label_already_in_blocks)
+                .fold(Vec::with_capacity(max), fold_new_multilabels);
+
+            self.multiple.replace(fitlered_mutliple);
+        }
+    }
 }
 
 fn combine_internal_labels<'c>(
     label_set: &mut LabelSet,
-    overlays: &HashSet<BlockName>,
     blocks: Vec<LabeledBlock<'c>>,
 ) -> Vec<ExternLabeledBlock<'c>> {
     let output = Vec::with_capacity(blocks.len());
@@ -242,21 +317,18 @@ fn combine_internal_labels<'c>(
         .into_iter()
         .map(LabeledBlock::into_extern_labeled)
         .fold(output, |mut acc, (extrn_block, internal_labels)| {
-            let block_name: &str = &extrn_block.block.name;
+            let block_name = &extrn_block.block.name;
 
             if let Some(ovl_labels) = label_set.overlays.get_mut(block_name) {
-                let overlay = overlays
-                    .get(block_name)
-                    .expect("interned overlay name string");
-                let internal_iter = internal_labels.into_iter().map(|(addr, mut label)| {
-                    label.add_overlay(overlay);
+                ovl_labels.extend(internal_labels);
+            } else {
+                let corrected_iter = internal_labels.into_iter().map(|(addr, mut label)| {
+                    label.set_global();
 
                     (addr, label)
                 });
 
-                ovl_labels.extend(internal_iter);
-            } else {
-                label_set.globals.extend(internal_labels);
+                label_set.globals.extend(corrected_iter);
             }
 
             acc.push(extrn_block);

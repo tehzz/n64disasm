@@ -135,6 +135,7 @@ impl DelaySlot {
     }
 }
 
+// TODO: have an instruction limit (<90?) for pointers just in case
 pub fn link_instructions<'s, 'i>(
     state: &'s mut LinkState,
     insn: &'i Instruction,

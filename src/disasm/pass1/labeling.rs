@@ -1,4 +1,4 @@
-use crate::disasm::memmap::BlockRange;
+use crate::disasm::memmap::{BlockName, BlockRange};
 use crate::disasm::pass1::{
     linkinsn::{Link, LinkedVal},
     Instruction, JumpKind,
@@ -10,7 +10,8 @@ use std::collections::HashMap;
 /// from capstone are folded at the end of pass1
 #[derive(Debug)]
 pub struct LabelState<'c> {
-    range: BlockRange,
+    name: &'c BlockName,
+    range: &'c BlockRange,
     config_global: &'c HashMap<u32, Label>,
     config_ovl: Option<&'c HashMap<u32, Label>>,
     pub internals: HashMap<u32, Label>,
@@ -20,8 +21,9 @@ pub struct LabelState<'c> {
 impl<'c> LabelState<'c> {
     /// Set up a new labeling state based on a block's memory range and known labels
     /// passed in the from the configuration yaml file.
-    pub fn from_config(range: BlockRange, set: &'c LabelSet, name: &'_ str) -> Self {
+    pub fn from_config(range: &'c BlockRange, set: &'c LabelSet, name: &'c BlockName) -> Self {
         Self {
+            name,
             range,
             config_global: &set.globals,
             config_ovl: set.overlays.get(name),
@@ -51,8 +53,9 @@ impl<'c> LabelState<'c> {
         }
     }
 
-    /// check if a given addr is contained within this state's memory range
-    fn is_in_config(&self, addr: u32) -> bool {
+    /// check if a given addr is a known label from the config file,
+    /// either in the global label map, or in this overlay's map (if applicable)
+    fn is_in_config_labels(&self, addr: u32) -> bool {
         self.config_global.contains_key(&addr)
             || self
                 .config_ovl
@@ -66,38 +69,41 @@ impl<'c> LabelState<'c> {
     }
 
     fn insert_local(&mut self, addr: u32) {
-        if self.is_in_config(addr) {
+        if self.is_in_config_labels(addr) {
             return;
         }
 
         if !self.internals.contains_key(&addr) {
-            self.internals.insert(addr, Label::local(addr));
+            self.internals
+                .insert(addr, Label::local(addr, Some(self.name)));
         }
     }
     fn insert_subroutine(&mut self, addr: u32) {
-        if self.is_in_config(addr) {
+        if self.is_in_config_labels(addr) {
             return;
         }
 
         if self.is_internal(addr) {
             if !self.internals.contains_key(&addr) {
-                self.internals.insert(addr, Label::global(addr));
+                self.internals
+                    .insert(addr, Label::routine(addr, Some(self.name)));
             }
         } else if !self.externals.contains_key(&addr) {
-            self.externals.insert(addr, Label::global(addr));
+            self.externals.insert(addr, Label::routine(addr, None));
         }
     }
     fn insert_data(&mut self, addr: u32) {
-        if self.is_in_config(addr) {
+        if self.is_in_config_labels(addr) {
             return;
         }
 
         if self.is_internal(addr) {
             if !self.internals.contains_key(&addr) {
-                self.internals.insert(addr, Label::data(addr));
+                self.internals
+                    .insert(addr, Label::data(addr, Some(self.name)));
             }
         } else if !self.externals.contains_key(&addr) {
-            self.externals.insert(addr, Label::data(addr));
+            self.externals.insert(addr, Label::data(addr, None));
         }
     }
 }
