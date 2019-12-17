@@ -1,5 +1,5 @@
-mod jumps;
 mod findlabels;
+mod jumps;
 mod linkinsn;
 
 use crate::config::Config;
@@ -198,23 +198,29 @@ fn combine_unique_external_labels<'c>(
                     label.set_unresolved(hits);
                     label
                 }),
-                Single(ovl) => {
+                Single(block) => {
                     // check if label already exists before inserting...?
-                    if let Some(ovl_labels) = label_set.overlays.get_mut(&ovl) {
-                        label.set_overlay(&ovl);
+                    if let Some(ovl_labels) = label_set.overlays.get_mut(&block) {
                         println!(
                             "{:4}Found single overlay from '{}' into '{}': {:x?}",
-                            "", &block_name, &ovl, &label
+                            "", &block_name, &block, &label
                         );
-                        ovl_labels.insert(addr, label);
+                        if !ovl_labels.contains_key(&addr) {
+                            label.set_overlay(&block);
+                            ovl_labels.insert(addr, label);
+                            println!("{:4}Label not found; inserted!", "");
+                        }
                     } else {
                         // must be a label from a global symbol
-                        label.set_global();
                         println!(
                             "{:4}Found global label from '{}' into '{}': {:x?}",
-                            "", &block_name, &ovl, &label
+                            "", &block_name, &block, &label
                         );
-                        label_set.globals.insert(addr, label);
+                        if label_set.globals.contains_key(&addr) {
+                            label.set_global();
+                            label_set.globals.insert(addr, label);
+                            println!("{:4}Global label not found; inserted!", "");
+                        }
                     }
                 }
             }
@@ -257,7 +263,7 @@ impl<'c> UnresolvedBlockLabels<'c> {
                         .overlays
                         .get(*name)
                         .and_then(|lbs| lbs.get(&label.addr))
-                        .map(|found_label| label.kind == found_label.kind || found_label.is_named() )
+                        .map(|found_label| label.kind == found_label.kind || found_label.is_named())
                         .unwrap_or(false)
                 })
                 .cloned()

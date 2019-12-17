@@ -146,31 +146,38 @@ impl LabelSet {
         let ovl_count = ovls.len();
         // Create maps for global symbols (addr => label)
         // and for overlay specific symbols (overlay => addr => label)
-        let mut globals = HashMap::new();
-        let mut overlays = ovls
-            .iter()
-            .fold(HashMap::with_capacity(ovl_count), |mut map, ovl| {
-                map.insert(ovl.clone(), HashMap::new());
-                map
-            });
+        let mut global_labels = HashMap::new();
+        let mut overlays_labels =
+            ovls.iter()
+                .fold(HashMap::with_capacity(ovl_count), |mut map, ovl| {
+                    map.insert(ovl.clone(), HashMap::new());
+                    map
+                });
 
         for raw_label in raw {
             match raw_label {
                 RawLabel::Global(..) => {
-                    let label = Label::from(raw_label);
-                    globals.insert(label.addr, label);
+                    let mut label = Label::from(raw_label);
+                    label.set_global();
+                    global_labels.insert(label.addr, label);
                 }
                 RawLabel::Overlayed(addr, ref symbol, ref ovl) => {
-                    let ovl_labels = overlays.get_mut(ovl.as_str()).ok_or_else(|| {
+                    let ovl_str = ovl.as_str();
+                    let ovl_labels = overlays_labels.get_mut(ovl_str).ok_or_else(|| {
                         LabelSetErr::UnknownOverlay(addr, symbol.clone(), ovl.clone())
                     })?;
-                    let label = Label::from(raw_label);
+                    let overlay_ref = ovls.get(ovl_str).expect("overlay must exist");
+                    let mut label = Label::from(raw_label);
+                    label.set_overlay(overlay_ref);
                     ovl_labels.insert(label.addr, label);
                 }
             };
         }
 
-        Ok(Self { globals, overlays })
+        Ok(Self {
+            globals: global_labels,
+            overlays: overlays_labels,
+        })
     }
 }
 
