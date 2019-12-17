@@ -81,6 +81,13 @@ impl Label {
         }
     }
 
+    pub fn is_named(&self) -> bool {
+        match self.kind {
+            LabelKind::Named(_) => true,
+            _ => false,
+        }
+    }
+
     pub fn local(addr: u32, ovl: Option<&BlockName>) -> Self {
         Self {
             addr,

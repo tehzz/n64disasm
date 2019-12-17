@@ -203,7 +203,7 @@ fn combine_unique_external_labels<'c>(
                     if let Some(ovl_labels) = label_set.overlays.get_mut(&ovl) {
                         label.set_overlay(&ovl);
                         println!(
-                            "{:4}Found single overlay from '{}' into '{}': {:?}",
+                            "{:4}Found single overlay from '{}' into '{}': {:x?}",
                             "", &block_name, &ovl, &label
                         );
                         ovl_labels.insert(addr, label);
@@ -257,7 +257,7 @@ impl<'c> UnresolvedBlockLabels<'c> {
                         .overlays
                         .get(*name)
                         .and_then(|lbs| lbs.get(&label.addr))
-                        .map(|found_label| label.kind == found_label.kind)
+                        .map(|found_label| label.kind == found_label.kind || found_label.is_named() )
                         .unwrap_or(false)
                 })
                 .cloned()
@@ -270,8 +270,8 @@ impl<'c> UnresolvedBlockLabels<'c> {
         let fold_new_multilabels =
             |mut acc: Vec<Label>, (mut label, new_found): (Label, Vec<BlockName>)| {
                 println!(
-                    "{:4}Found label {:08x} in {:x?}",
-                    "", label.addr, &new_found
+                    "{:4}Found label {:08x} <{:?}> in {:x?}",
+                    "", label.addr, label.kind, &new_found
                 );
                 println!("{:8}Used to be in {:x?}", "", &label.location);
 

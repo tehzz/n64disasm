@@ -36,7 +36,8 @@ fn main() {
 
 fn run(opts: Opts) -> Result<(), Box<dyn Error>> {
     let config = config::parse_config(&opts.config)?;
-    println!("Config Memory Map: {:#?}", &config.memory);
+    //println!("Config Memory Map: {:#?}", &config.memory);
+    println!("Config Labels: {:#x?}", &config.labels);
     disasm::pass1(config, &opts.rom)?;
 
     Ok(())
