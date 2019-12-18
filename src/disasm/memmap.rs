@@ -56,13 +56,13 @@ pub enum MemoryMapErr {
 
 #[derive(Debug)]
 pub struct MemoryMap {
-    /// sorted map of code sections (based on text start)
     pub blocks: Vec<CodeBlock>,
     /// list of overlays
     pub overlays: HashSet<BlockName>,
     /// set of loaded overlays for a given overlay
     pub overlay_sets: OverlaySet,
     /// A cache of offsets into `blocks` for overlayed code (based on `overlay_sets`)
+    /// So, Overlay => [Idx of Possible Loaded Other Overlays]
     overlay_set_cache: HashMap<BlockName, Vec<usize>>,
     /// Map between block name and index of `blocks` array
     block_map: HashMap<BlockName, usize>,
