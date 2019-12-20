@@ -5,19 +5,17 @@
 //!    This is done in `combine_internal_labels` by combining the labels
 //!    discovered by the disassembly with the labels provided by the user in the config.
 //!    Also, add the overlay name to any found symbols
-//! 2) Collect external symbols into a similar setup
-//! 3) Go through external symbols to try to resolve. Do this by making a
-//!    "memory map" struct that can take an address and output N (1+) number of
-//!    blocks that the address is in
-//!       a) For externals from global blocks, they could go anywhere, so have to check full map
-//!       b) For externals from overlayed blocks, they could be in the static sections or
-//!          in the set of loaded overlays; thus, need a limited "submap"
-//! 4) If a symbol can only be in one block, resolve that symbol.
-//!    Collect symbols that could be in more than one block.
-//! 5) Try to resolve symbols in more than one block
-//!       a) see if the symbol is now in one of those blocks (it was resolved somewhere else)
-//!       b) if not..?
-//!
+//! 2) Collect external symbols into three bins based on the symbol's address:
+//!     i) Not Found symbols
+//!     ii) Symbols that could be in multiple memory blocks
+//!     iii) Symbols that could only be in a single block
+//!    Put the the III symbols into their proper label maps
+//! 3) Check the address of the possible multiple memory block symbols to see 
+//!    if there is already a matching symbol in one of the memory blocks. If so,
+//!    remove that symbol from the bin
+//! 4) Combine all not found/not in memory block symbols into one map
+//! 5) Return a `Vec` of instructions and unresolved, multi-block symbols and 
+//!    the Not Found symbol map 
 
 use crate::disasm::{
     instruction::Instruction,
@@ -26,48 +24,59 @@ use crate::disasm::{
 };
 use std::collections::HashMap;
 
+#[derive(Debug)]
+pub struct ResolvedBlock<'c> {
+    instructions: Vec<Instruction>,
+    multi_block_labels: Option<Vec<Label>>,
+    name: &'c CodeBlock,
+}
+
+impl<'c> ResolvedBlock<'c> {
+    fn new(block: ProcessedBlock<'c>, labels: Option<Vec<Label>>) -> Self {
+        Self {
+            instructions: block.instructions,
+            multi_block_labels: labels,
+            name: block.block,
+        }
+    }
+}
+
+pub type NotFoundLabelsMap = HashMap<u32, Label>;
+
 pub fn resolve(label_set: &mut LabelSet, memory_map: &MemoryMap, blocks: Vec<LabeledBlock>) {
     let external_labeled_blocks = combine_internal_labels(label_set, blocks);
-    let (final_blocks, unresolved_labels) =
+    let combined_externals =
         combine_unique_external_labels(label_set, memory_map, external_labeled_blocks);
 
-    println!("\nUnresolved Labels:");
-    let mut init_total = 0;
-    let mut second_pass_total = 0;
-    for mut unresolved_labels in unresolved_labels {
-        let new_unres = unresolved_labels
-            .multiple
-            .as_ref()
-            .map(Vec::len)
-            .unwrap_or(0);
-        init_total += new_unres;
-
-        println!(
-            "Found {:?} unresolved multi-block labels in {}",
-            new_unres, unresolved_labels.block
-        );
+    let mut notfound_map = NotFoundLabelsMap::new();
+    for (block, mut unresolved_labels) in combined_externals {
+        println!( "Unresolved multi-block labels in {}", unresolved_labels.block );
         unresolved_labels.resolve_multi_labels(label_set);
+        let (multi_block_labels, not_found) = unresolved_labels.into_components();
 
-        let second_pass = unresolved_labels
-            .multiple
-            .as_ref()
-            .map(Vec::len)
-            .unwrap_or(0);
-        second_pass_total += second_pass;
+        if let Some(labels) = not_found {
+            notfound_map.extend(
+                labels.into_iter()
+                .map(|l| (l.addr, l))
+            );
+        }
+
+        let resolved_block = ResolvedBlock::new(block, multi_block_labels);
+
+        println!("{:4}{:#x?}", "",resolved_block.multi_block_labels);
     }
-    println!("Pass 1 total unresolved multi-block: {}", init_total);
-    println!("Pass 2 total unresolved multi-block: {}", second_pass_total);
+
+    println!("Not Found Labels:\n{:4}{:#x?}", "", notfound_map);
 }
 
 fn combine_unique_external_labels<'c>(
     label_set: &mut LabelSet,
     memory_map: &MemoryMap,
     blocks: Vec<ExternLabeledBlock<'c>>,
-) -> (Vec<ProcessedBlock<'c>>, Vec<UnresolvedBlockLabels<'c>>) {
+) -> Vec<(ProcessedBlock<'c>, UnresolvedBlockLabels<'c>)> {
     use AddrLocation::*;
 
-    let mut output_blocks = Vec::with_capacity(blocks.len());
-    let mut unresolved_blocks = Vec::with_capacity(blocks.len());
+    let mut output = Vec::with_capacity(blocks.len());
 
     for block in blocks {
         let (proc_block, external_labels) = block.into_proc_block();
@@ -112,11 +121,10 @@ fn combine_unique_external_labels<'c>(
                 }
             }
         }
-        output_blocks.push(proc_block);
-        unresolved_blocks.push(unresolved);
+        output.push((proc_block, unresolved));
     }
 
-    (output_blocks, unresolved_blocks)
+    output
 }
 
 /// Hold any `Label`s that couldn't be found or resolved into a single overlay.
@@ -124,16 +132,16 @@ fn combine_unique_external_labels<'c>(
 #[derive(Debug)]
 struct UnresolvedBlockLabels<'c> {
     block: &'c BlockName,
-    not_found: Option<Vec<Label>>,
     multiple: Option<Vec<Label>>,
+    not_found: Option<Vec<Label>>,
 }
 
 impl<'c> UnresolvedBlockLabels<'c> {
     fn new(block: &'c BlockName) -> Self {
         Self {
             block,
-            not_found: None,
             multiple: None,
+            not_found: None,
         }
     }
 
@@ -200,6 +208,10 @@ impl<'c> UnresolvedBlockLabels<'c> {
 
             self.multiple.replace(fitlered_mutliple);
         }
+    }
+
+    fn into_components(self) -> (Option<Vec<Label>>, Option<Vec<Label>>) {
+        (self.multiple, self.not_found)
     }
 }
 
