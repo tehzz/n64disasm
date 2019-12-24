@@ -10,12 +10,12 @@
 //!     ii) Symbols that could be in multiple memory blocks
 //!     iii) Symbols that could only be in a single block
 //!    Put the the III symbols into their proper label maps
-//! 3) Check the address of the possible multiple memory block symbols to see 
+//! 3) Check the address of the possible multiple memory block symbols to see
 //!    if there is already a matching symbol in one of the memory blocks. If so,
 //!    remove that symbol from the bin
 //! 4) Combine all not found/not in memory block symbols into one map
-//! 5) Return a `Vec` of instructions and unresolved, multi-block symbols and 
-//!    the Not Found symbol map 
+//! 5) Return a `Vec` of instructions and unresolved, multi-block symbols and
+//!    the Not Found symbol map
 
 use crate::disasm::{
     instruction::Instruction,
@@ -41,34 +41,43 @@ impl<'c> ResolvedBlock<'c> {
     }
 }
 
-pub type NotFoundLabelsMap = HashMap<u32, Label>;
+pub type NotFoundLabels = HashMap<u32, Label>;
 
-pub fn resolve(label_set: &mut LabelSet, memory_map: &MemoryMap, blocks: Vec<LabeledBlock>) {
+pub fn resolve<'c>(
+    label_set: &mut LabelSet,
+    memory_map: &MemoryMap,
+    blocks: Vec<LabeledBlock<'c>>,
+) -> (Vec<ResolvedBlock<'c>>, NotFoundLabels) {
+    let n = blocks.len();
     let external_labeled_blocks = combine_internal_labels(label_set, blocks);
     let combined_externals =
         combine_unique_external_labels(label_set, memory_map, external_labeled_blocks);
 
-    let mut notfound_map = NotFoundLabelsMap::new();
-    for (block, mut unresolved_labels) in combined_externals {
-        println!( "Unresolved multi-block labels in {}", unresolved_labels.block );
-        unresolved_labels.resolve_multi_labels(label_set);
-        let (multi_block_labels, not_found) = unresolved_labels.into_components();
-
-        if let Some(labels) = not_found {
-            notfound_map.extend(
-                labels.into_iter()
-                .map(|l| (l.addr, l))
+    let output_acc = (Vec::with_capacity(n), NotFoundLabels::new());
+    combined_externals
+        .into_iter()
+        .fold(output_acc, |mut acc, (block, mut unresolved_labels)| {
+            println!(
+                "Unresolved multi-block labels in {}",
+                unresolved_labels.block
             );
-        }
+            unresolved_labels.resolve_multi_labels(label_set);
+            let (multi_block_labels, not_found) = unresolved_labels.into_components();
 
-        let resolved_block = ResolvedBlock::new(block, multi_block_labels);
+            if let Some(labels) = not_found {
+                acc.1.extend(labels.into_iter().map(|l| (l.addr, l)));
+            };
 
-        println!("{:4}{:#x?}", "",resolved_block.multi_block_labels);
-    }
+            let resolved_block = ResolvedBlock::new(block, multi_block_labels);
+            println!("{:4}{:#x?}", "", resolved_block.multi_block_labels);
+            acc.0.push(resolved_block);
 
-    println!("Not Found Labels:\n{:4}{:#x?}", "", notfound_map);
+            acc
+        })
 }
 
+/// Attempt to resolve the location of external labels from a block of `blocks`
+/// based on the address of that label, and that block's memory map
 fn combine_unique_external_labels<'c>(
     label_set: &mut LabelSet,
     memory_map: &MemoryMap,
@@ -101,22 +110,22 @@ fn combine_unique_external_labels<'c>(
                             "{:4}Found single overlay from '{}' into '{}': {:x?}",
                             "", &block_name, &block, &label
                         );
-                        if !ovl_labels.contains_key(&addr) {
-                            label.set_overlay(&block);
-                            ovl_labels.insert(addr, label);
+                        ovl_labels.entry(addr).or_insert_with(|| {
                             println!("{:4}Label not found; inserted!", "");
-                        }
+                            label.set_overlay(&block);
+                            label
+                        });
                     } else {
                         // must be a label from a global symbol
                         println!(
                             "{:4}Found global label from '{}' into '{}': {:x?}",
                             "", &block_name, &block, &label
                         );
-                        if label_set.globals.contains_key(&addr) {
-                            label.set_global();
-                            label_set.globals.insert(addr, label);
+                        label_set.globals.entry(addr).or_insert_with(|| {
                             println!("{:4}Global label not found; inserted!", "");
-                        }
+                            label.set_global();
+                            label
+                        });
                     }
                 }
             }
@@ -125,6 +134,60 @@ fn combine_unique_external_labels<'c>(
     }
 
     output
+}
+
+pub struct LabeledBlock<'c> {
+    pub instructions: Vec<Instruction>,
+    pub block: &'c CodeBlock,
+    pub internal_labels: HashMap<u32, Label>,
+    pub external_labels: HashMap<u32, Label>,
+}
+
+impl<'c> LabeledBlock<'c> {
+    fn into_extern_labeled(self) -> (ExternLabeledBlock<'c>, HashMap<u32, Label>) {
+        let Self {
+            instructions,
+            block,
+            internal_labels,
+            external_labels,
+        } = self;
+        (
+            ExternLabeledBlock {
+                instructions,
+                block,
+                external_labels,
+            },
+            internal_labels,
+        )
+    }
+}
+
+struct ExternLabeledBlock<'c> {
+    instructions: Vec<Instruction>,
+    block: &'c CodeBlock,
+    external_labels: HashMap<u32, Label>,
+}
+
+impl<'c> ExternLabeledBlock<'c> {
+    fn into_proc_block(self) -> (ProcessedBlock<'c>, HashMap<u32, Label>) {
+        let Self {
+            instructions,
+            block,
+            external_labels,
+        } = self;
+        (
+            ProcessedBlock {
+                instructions,
+                block,
+            },
+            external_labels,
+        )
+    }
+}
+
+struct ProcessedBlock<'c> {
+    instructions: Vec<Instruction>,
+    block: &'c CodeBlock,
 }
 
 /// Hold any `Label`s that couldn't be found or resolved into a single overlay.
@@ -249,58 +312,4 @@ fn combine_internal_labels<'c>(
         .into_iter()
         .map(LabeledBlock::into_extern_labeled)
         .fold(output, fold_into_externblock)
-}
-
-pub struct LabeledBlock<'c> {
-    pub instructions: Vec<Instruction>,
-    pub block: &'c CodeBlock,
-    pub internal_labels: HashMap<u32, Label>,
-    pub external_labels: HashMap<u32, Label>,
-}
-
-impl<'c> LabeledBlock<'c> {
-    fn into_extern_labeled(self) -> (ExternLabeledBlock<'c>, HashMap<u32, Label>) {
-        let Self {
-            instructions,
-            block,
-            internal_labels,
-            external_labels,
-        } = self;
-        (
-            ExternLabeledBlock {
-                instructions,
-                block,
-                external_labels,
-            },
-            internal_labels,
-        )
-    }
-}
-
-struct ExternLabeledBlock<'c> {
-    instructions: Vec<Instruction>,
-    block: &'c CodeBlock,
-    external_labels: HashMap<u32, Label>,
-}
-
-impl<'c> ExternLabeledBlock<'c> {
-    fn into_proc_block(self) -> (ProcessedBlock<'c>, HashMap<u32, Label>) {
-        let Self {
-            instructions,
-            block,
-            external_labels,
-        } = self;
-        (
-            ProcessedBlock {
-                instructions,
-                block,
-            },
-            external_labels,
-        )
-    }
-}
-
-struct ProcessedBlock<'c> {
-    instructions: Vec<Instruction>,
-    block: &'c CodeBlock,
 }
