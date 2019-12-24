@@ -16,6 +16,9 @@ pub const INS_ADDIU: u32 = MIPS_INS_ADDIU as u32;
 pub const INS_ORI: u32 = MIPS_INS_ORI as u32;
 pub const INS_MTC1: u32 = MIPS_INS_MTC1 as u32;
 
+pub const INS_MTC0: u32 = MIPS_INS_MTC0 as u32;
+pub const INS_MFC0: u32 = MIPS_INS_MFC0 as u32;
+
 pub const INS_SD: u32 = MIPS_INS_SD as u32;
 pub const INS_SW: u32 = MIPS_INS_SW as u32;
 pub const INS_SH: u32 = MIPS_INS_SH as u32;

@@ -100,6 +100,14 @@ fn process_block<'b>(
             let detail = cs.insn_detail(&i)?;
             Instruction::from_components(&i, &detail)
         })
+        .inspect(|i| {
+            use crate::disasm::mipsvals::*;
+            match i.as_ref().unwrap().id.0 {
+                INS_MTC0 => println!("LOOK MTC0:\n{:x?}", &i),
+                INS_MFC0 => println!("LOOK MFC0:\n{:x?}", &i),
+                _ => ()
+            };
+        })
         .scan(NLState::Clear, |s, res| {
             Some(res.map(|i| indicate_newlines(s, i)))
         })
@@ -144,7 +152,7 @@ fn fold_instructions(
     let mut insn = insn?;
     let maybe_linked = link_instructions(&mut state.link_state, &insn, offset)?;
 
-    csutil::fix_move(&mut insn);
+    csutil::correct_insn(&mut insn);
     state.instructions.push(insn);
 
     if let Some(linked_values) = maybe_linked {
