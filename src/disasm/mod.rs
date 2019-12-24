@@ -1,3 +1,4 @@
+mod csutil;
 mod instruction;
 pub mod memmap;
 mod mipsvals;

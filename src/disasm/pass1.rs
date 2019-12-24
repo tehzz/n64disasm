@@ -5,12 +5,12 @@ mod resolvelabels;
 
 use crate::config::Config;
 use crate::disasm::{
+    csutil,
     instruction::{InsnParseErr, Instruction},
     memmap::CodeBlock,
-    mipsvals::*,
     LabelSet,
 };
-use capstone::{arch::mips::MipsOperand, arch::mips::MipsReg::*, prelude::*};
+use capstone::prelude::*;
 use err_derive::Error;
 use linkinsn::{link_instructions, LinkInsnErr, LinkState};
 use std::fs::File;
@@ -37,21 +37,12 @@ pub enum Pass1Error {
 
 type P1Result<T> = Result<T, Pass1Error>;
 
-fn get_cs_instance() -> Result<Capstone, capstone::Error> {
-    Capstone::new()
-        .mips()
-        .detail(true)
-        .mode(arch::mips::ArchMode::Mips64)
-        .endian(capstone::Endian::Big)
-        .build()
-}
-
 pub fn pass1(config: Config, rom: &Path) -> P1Result<()> {
     let Config {
         memory: memory_map,
         labels: mut config_labels,
     } = config;
-    let cs = get_cs_instance()?;
+    let cs = csutil::get_instance()?;
 
     let mut rom = File::open(rom)?;
     let read_rom = |block| read_codeblock(block, &mut rom);
@@ -153,7 +144,7 @@ fn fold_instructions(
     let mut insn = insn?;
     let maybe_linked = link_instructions(&mut state.link_state, &insn, offset)?;
 
-    fix_move(&mut insn);
+    csutil::fix_move(&mut insn);
     state.instructions.push(insn);
 
     if let Some(linked_values) = maybe_linked {
@@ -179,37 +170,6 @@ fn fold_instructions(
     state.label_state.check_instruction(insn_ref);
 
     Ok(state)
-}
-
-/// capstone `move d, s` instructions should be either an `or d, s, $zero`
-/// or an `addu d, s, $zero`. This converts the `Instruction` back
-fn fix_move(insn: &mut Instruction) {
-    // MIPS `or` insn:       0000 00ss ssst tttt dddd d000 0010 0101  => 37
-    // MIPS 'addu' insn:     0000 00ss ssst tttt dddd d000 0010 0001  => 33
-    const INSN_MASK: u32 = 0b1111_1100_0000_0000_0000_0111_1111_1111;
-
-    if insn.id.0 != INS_MOVE {
-        return;
-    }
-
-    insn.mnemonic.clear();
-    match insn.raw & INSN_MASK {
-        33 => {
-            insn.id = InsnId(INS_ADDU);
-            insn.mnemonic.push_str("addu");
-        }
-        37 => {
-            insn.id = InsnId(INS_OR);
-            insn.mnemonic.push_str("or");
-        }
-        _ => panic!("Unknown 'move' instruction: {:08x}", insn.raw),
-    }
-
-    if let Some(ref mut op) = insn.op_str {
-        op.push_str(", $zero");
-    }
-    let zero_operand = MipsOperand::Reg(RegId(MIPS_REG_ZERO as u16));
-    insn.operands.push(zero_operand);
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
