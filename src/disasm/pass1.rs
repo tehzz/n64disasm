@@ -16,6 +16,7 @@ use linkinsn::{link_instructions, LinkInsnErr, LinkState};
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
+use log::{info, debug};
 
 use findlabels::LabelState;
 use resolvelabels::LabeledBlock;
@@ -95,7 +96,7 @@ fn process_block<'b>(
     let cs_instructions = cs.disasm_all(&buf, block_vaddr)?;
     let num_insn = cs_instructions.len();
 
-    println!("Found {} instructions in block '{}'", num_insn, &block.name);
+    info!("Found {} instructions in block '{}'", num_insn, &block.name);
 
     let label_state = LabelState::from_config(&block.range, &labels, &block.name);
     let pass1_state = FoldInsnState::new(num_insn, label_state);
@@ -161,7 +162,7 @@ fn fold_instructions(
         for link in linked_values.filter(|l| !l.is_empty()) {
             let Link { instruction, .. } = link.get_link().expect("no empty linked values");
 
-            println!(
+            debug!(
                 "{:4}@{:>5}: {}",
                 "",
                 instruction as isize - offset as isize,

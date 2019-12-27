@@ -64,9 +64,6 @@ pub fn resolve<'c>(
     let n = blocks.len();
     let ext_only_blocks = add_internal_labels_to_set(label_set, blocks);
     let pass1_ext_blocks = pass1_external_labels(label_set, memory_map, ext_only_blocks);
-    for block in &pass1_ext_blocks {
-        println!("{}\n{:4}{:#x?}", block.info.name, "", block.label_loc_cache);
-    }
 
     let output_acc = (Vec::with_capacity(n), NotFoundLabels::new());
     pass1_ext_blocks
@@ -80,7 +77,6 @@ pub fn resolve<'c>(
                 acc.1.extend(labels.into_iter().map(|l| (l.addr, l)));
             };
 
-            println!("{:4}{:#x?}", "", resolved_block.multi_block_labels);
             acc.0.push(resolved_block);
 
             acc
@@ -231,9 +227,11 @@ fn pass1_external_labels<'c>(
         let block_name = &proc_block.info.name;
 
         println!("First pass on external labels for {}", &block_name);
+        println!("{:4}Started with {} external labels", "", &external_labels.len());
         for (addr, mut label) in external_labels {
             match memory_map.get_addr_location(addr, block_name) {
                 NotFound => {
+                    println!("{:8}Couldn't find label in memory: {:x?}", "", &label);
                     proc_block.label_loc_cache.insert(addr, LabelPlace::NotFound);
                     label.set_not_found();
                     proc_block.unresolved.not_found.get_or_insert_with(Vec::new).push(label);
@@ -245,26 +243,26 @@ fn pass1_external_labels<'c>(
                 Single(block) => {
                     if let Some(ovl_labels) = label_set.overlays.get_mut(&block) {
                         println!(
-                            "{:4}Found single overlay from '{}' into '{}': {:x?}",
+                            "{:8}Found single label from '{}' into '{}': {:x?}",
                             "", &block_name, &block, &label
                         );
                         proc_block.label_loc_cache
                             .insert(addr, LabelPlace::External(block.clone()));
                         ovl_labels.entry(addr).or_insert_with(|| {
-                            println!("{:4}Label not found; inserted!", "");
+                            println!("{:10}Label not found; inserted!", "");
                             label.set_overlay(&block);
                             label
                         });
                     } else {
                         // must be a label from a global symbol
                         println!(
-                            "{:4}Found global label from '{}' into '{}': {:x?}",
+                            "{:8}Found global label from '{}' into '{}': {:x?}",
                             "", &block_name, &block, &label
                         );
                         proc_block.label_loc_cache
                             .insert(addr, LabelPlace::Global);
                         label_set.globals.entry(addr).or_insert_with(|| {
-                            println!("{:4}Global label not found; inserted!", "");
+                            println!("{:10}Global label not found; inserted!", "");
                             label.set_global();
                             label
                         });
@@ -272,6 +270,10 @@ fn pass1_external_labels<'c>(
                 }
             }
         }
+        let unres = proc_block.unresolved.multiple.as_ref().map(Vec::len).unwrap_or(0);
+        let notfound = proc_block.unresolved.not_found.as_ref().map(Vec::len).unwrap_or(0);
+        println!("{:4}Ended with {} unresovled labels and {} not found labels", "", unres, notfound);
+
         output.push(proc_block);
     }
 
@@ -340,7 +342,7 @@ fn pass2_multi_labels(block: &mut ProcessedBlock, label_set: &mut LabelSet) {
     if let Some(multiple) = block.unresolved.multiple.take() {
         let max = multiple.len();
 
-        println!("Resolving multi-block labels from {}", &block.info.name);
+        println!("Second pass on multi-block labels from {}", &block.info.name);
         let fitlered_mutliple = multiple
             .into_iter()
             .map(find_label_already_in_blocks)
