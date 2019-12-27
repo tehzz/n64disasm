@@ -37,6 +37,17 @@ pub enum Pass1Error {
 
 type P1Result<T> = Result<T, Pass1Error>;
 
+//pub struct Pass1 {
+//    memory: MemoryMap,
+//    labels: LabelSet,
+//}
+//
+//struct BlockInsn {
+//    instructions: Vec<Instruction>,
+//    block_offset: usize,
+//    label_locations: HashMap<u32, BlockName>,
+//}
+
 pub fn pass1(config: Config, rom: &Path) -> P1Result<()> {
     let Config {
         memory: memory_map,
@@ -87,6 +98,7 @@ fn process_block<'b>(
     println!("Found {} instructions in block '{}'", num_insn, &block.name);
 
     let label_state = LabelState::from_config(&block.range, &labels, &block.name);
+    let pass1_state = FoldInsnState::new(num_insn, label_state);
 
     let FoldInsnState {
         instructions,
@@ -94,25 +106,15 @@ fn process_block<'b>(
         ..
     } = cs_instructions
         .iter()
-        //.take(5000)
-        //.inspect(|i| println!("{}", i))
         .map(|i| {
             let detail = cs.insn_detail(&i)?;
             Instruction::from_components(&i, &detail)
-        })
-        .inspect(|i| {
-            use crate::disasm::mipsvals::*;
-            match i.as_ref().unwrap().id.0 {
-                INS_MTC0 => println!("LOOK MTC0:\n{:x?}", &i),
-                INS_MFC0 => println!("LOOK MFC0:\n{:x?}", &i),
-                _ => ()
-            };
         })
         .scan(NLState::Clear, |s, res| {
             Some(res.map(|i| indicate_newlines(s, i)))
         })
         .enumerate()
-        .try_fold(FoldInsnState::new(num_insn, label_state), fold_instructions)?;
+        .try_fold(pass1_state, fold_instructions)?;
 
     let LabelState {
         internals: internal_labels,
@@ -122,7 +124,7 @@ fn process_block<'b>(
 
     Ok(LabeledBlock {
         instructions,
-        block,
+        info: block,
         internal_labels,
         external_labels,
     })

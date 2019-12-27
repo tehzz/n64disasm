@@ -250,8 +250,6 @@ fn fold_codeblocks(mut acc: FoldBlockAcc, block: CodeBlock) -> Result<FoldBlockA
 fn create_base_ovl_set(info: &FoldBlockAcc) -> OverlaySet {
     use BlockKind::*;
 
-    println!("{:?}", &info.base_ovls);
-
     info.base_ovls
         .iter()
         .map(|base| {
