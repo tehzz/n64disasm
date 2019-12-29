@@ -26,10 +26,10 @@ use std::collections::HashMap;
 
 #[derive(Debug)]
 pub struct ResolvedBlock<'c> {
-    instructions: Vec<Instruction>,
-    label_loc_cache: HashMap<u32, LabelPlace>,
-    multi_block_labels: Option<Vec<Label>>,
-    info: &'c CodeBlock,
+    pub instructions: Vec<Instruction>,
+    pub label_loc_cache: HashMap<u32, LabelPlace>,
+    pub multi_block_labels: Option<Vec<Label>>,
+    pub info: &'c CodeBlock,
 }
 
 impl<'c> ResolvedBlock<'c> {

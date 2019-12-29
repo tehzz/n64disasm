@@ -7,8 +7,8 @@ use crate::config::Config;
 use crate::disasm::{
     csutil,
     instruction::{InsnParseErr, Instruction},
-    memmap::CodeBlock,
-    LabelSet,
+    memmap::{CodeBlock, MemoryMap, BlockName},
+    LabelSet, Label,
 };
 use capstone::prelude::*;
 use err_derive::Error;
@@ -16,6 +16,7 @@ use linkinsn::{link_instructions, LinkInsnErr, LinkState};
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
+use std::collections::HashMap;
 use log::{info, debug};
 
 use findlabels::LabelState;
@@ -23,6 +24,7 @@ use resolvelabels::LabeledBlock;
 
 pub use jumps::JumpKind;
 pub use linkinsn::{Link, LinkedVal};
+pub use resolvelabels::{ResolvedBlock, LabelPlace};
 
 #[derive(Debug, Error)]
 pub enum Pass1Error {
@@ -38,18 +40,37 @@ pub enum Pass1Error {
 
 type P1Result<T> = Result<T, Pass1Error>;
 
-//pub struct Pass1 {
-//    memory: MemoryMap,
-//    labels: LabelSet,
-//}
-//
-//struct BlockInsn {
-//    instructions: Vec<Instruction>,
-//    block_offset: usize,
-//    label_locations: HashMap<u32, BlockName>,
-//}
+pub struct Pass1 {
+    memory_map: MemoryMap,
+    labels: LabelSet,
+    blocks: Vec<BlockInsn>,
+    not_found_labels: HashMap<u32, Label>,
+}
 
-pub fn pass1(config: Config, rom: &Path) -> P1Result<()> {
+struct BlockInsn {
+    instructions: Vec<Instruction>,
+    name: BlockName,
+    /// Labels that could be in multiple other blocks
+    unresolved_labels: Option<HashMap<u32, Label>>,
+    /// Map of address to where the label for the address is
+    label_locations: HashMap<u32, LabelPlace>,
+}
+
+impl From<ResolvedBlock<'_>> for BlockInsn {
+    fn from(src: ResolvedBlock) -> Self {
+        let unresolved_labels = src.multi_block_labels.map(|v| v.into_iter().map(|l| (l.addr, l)).collect());
+        let name = src.info.name.clone();
+
+        Self {
+            instructions: src.instructions,
+            name,
+            unresolved_labels,
+            label_locations: src.label_loc_cache,
+        }
+    }
+}
+
+pub fn pass1(config: Config, rom: &Path) -> P1Result<Pass1> {
     let Config {
         memory: memory_map,
         labels: mut config_labels,
@@ -67,9 +88,16 @@ pub fn pass1(config: Config, rom: &Path) -> P1Result<()> {
         .map(proc_insns)
         .collect::<P1Result<Vec<_>>>()?;
 
-    resolvelabels::resolve(&mut config_labels, &memory_map, labeled_blocks);
+    let (blocks, not_found_labels) = resolvelabels::resolve(&mut config_labels, &memory_map, labeled_blocks);
+    let instructions = blocks.into_iter().map(BlockInsn::from).collect();
+    let pass1 = Pass1 {
+        memory_map,
+        labels: config_labels,
+        blocks: instructions,
+        not_found_labels
+    };
 
-    Ok(())
+    Ok(pass1)
 }
 
 /// Helper function to read a `CodeBlock`'s raw bytes from the ROM
