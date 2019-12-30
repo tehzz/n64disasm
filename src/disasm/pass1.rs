@@ -7,24 +7,24 @@ use crate::config::Config;
 use crate::disasm::{
     csutil,
     instruction::{InsnParseErr, Instruction},
-    memmap::{CodeBlock, MemoryMap, BlockName},
-    LabelSet, Label,
+    labels::{Label, LabelSet},
+    memmap::{BlockName, CodeBlock, MemoryMap},
 };
 use capstone::prelude::*;
 use err_derive::Error;
 use linkinsn::{link_instructions, LinkInsnErr, LinkState};
+use log::{debug, info};
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
-use std::collections::HashMap;
-use log::{info, debug};
 
 use findlabels::LabelState;
 use resolvelabels::LabeledBlock;
 
 pub use jumps::JumpKind;
 pub use linkinsn::{Link, LinkedVal};
-pub use resolvelabels::{ResolvedBlock, LabelPlace};
+pub use resolvelabels::{LabelPlace, ResolvedBlock};
 
 #[derive(Debug, Error)]
 pub enum Pass1Error {
@@ -58,7 +58,9 @@ struct BlockInsn {
 
 impl From<ResolvedBlock<'_>> for BlockInsn {
     fn from(src: ResolvedBlock) -> Self {
-        let unresolved_labels = src.multi_block_labels.map(|v| v.into_iter().map(|l| (l.addr, l)).collect());
+        let unresolved_labels = src
+            .multi_block_labels
+            .map(|v| v.into_iter().map(|l| (l.addr, l)).collect());
         let name = src.info.name.clone();
 
         Self {
@@ -88,13 +90,14 @@ pub fn pass1(config: Config, rom: &Path) -> P1Result<Pass1> {
         .map(proc_insns)
         .collect::<P1Result<Vec<_>>>()?;
 
-    let (blocks, not_found_labels) = resolvelabels::resolve(&mut config_labels, &memory_map, labeled_blocks);
+    let (blocks, not_found_labels) =
+        resolvelabels::resolve(&mut config_labels, &memory_map, labeled_blocks);
     let instructions = blocks.into_iter().map(BlockInsn::from).collect();
     let pass1 = Pass1 {
         memory_map,
         labels: config_labels,
         blocks: instructions,
-        not_found_labels
+        not_found_labels,
     };
 
     Ok(pass1)

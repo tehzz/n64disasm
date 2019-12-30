@@ -19,8 +19,8 @@
 
 use crate::disasm::{
     instruction::Instruction,
+    labels::{Label, LabelSet},
     memmap::{AddrLocation, BlockName, CodeBlock, MemoryMap},
-    Label, LabelSet,
 };
 use std::collections::HashMap;
 
@@ -36,12 +36,15 @@ impl<'c> ResolvedBlock<'c> {
     fn from_processed(block: ProcessedBlock<'c>) -> (Self, Option<Vec<Label>>) {
         let (multi_block_labels, not_found) = block.unresolved.into_components();
 
-        (Self {
-            instructions: block.instructions,
-            label_loc_cache: block.label_loc_cache,
-            multi_block_labels,
-            info: block.info,
-        }, not_found)
+        (
+            Self {
+                instructions: block.instructions,
+                label_loc_cache: block.label_loc_cache,
+                multi_block_labels,
+                info: block.info,
+            },
+            not_found,
+        )
     }
 }
 
@@ -99,13 +102,14 @@ impl<'c> LabeledBlock<'c> {
             external_labels,
         } = self;
         let n = internal_labels.len() + external_labels.len();
-        let label_loc_cache = internal_labels
-            .keys()
-            .copied()
-            .fold(HashMap::with_capacity(n), |mut map, addr| {
-                map.insert(addr, LabelPlace::Internal);
-                map
-            });
+        let label_loc_cache =
+            internal_labels
+                .keys()
+                .copied()
+                .fold(HashMap::with_capacity(n), |mut map, addr| {
+                    map.insert(addr, LabelPlace::Internal);
+                    map
+                });
 
         (
             ExternLabeledBlock {
@@ -189,12 +193,10 @@ fn add_internal_labels_to_set<'c>(
             if let Some(ovl_labels) = label_set.overlays.get_mut(block_name) {
                 ovl_labels.extend(internal_labels);
             } else {
-                let adj_label_iter = internal_labels
-                    .into_iter()
-                    .map(|(addr, mut label)| {
-                        label.set_global();
-                        (addr, label)
-                    });
+                let adj_label_iter = internal_labels.into_iter().map(|(addr, mut label)| {
+                    label.set_global();
+                    (addr, label)
+                });
 
                 label_set.globals.extend(adj_label_iter);
             }
@@ -227,26 +229,41 @@ fn pass1_external_labels<'c>(
         let block_name = &proc_block.info.name;
 
         println!("First pass on external labels for {}", &block_name);
-        println!("{:4}Started with {} external labels", "", &external_labels.len());
+        println!(
+            "{:4}Started with {} external labels",
+            "",
+            &external_labels.len()
+        );
         for (addr, mut label) in external_labels {
             match memory_map.get_addr_location(addr, block_name) {
                 NotFound => {
                     println!("{:8}Couldn't find label in memory: {:x?}", "", &label);
-                    proc_block.label_loc_cache.insert(addr, LabelPlace::NotFound);
+                    proc_block
+                        .label_loc_cache
+                        .insert(addr, LabelPlace::NotFound);
                     label.set_not_found();
-                    proc_block.unresolved.not_found.get_or_insert_with(Vec::new).push(label);
-                },
+                    proc_block
+                        .unresolved
+                        .not_found
+                        .get_or_insert_with(Vec::new)
+                        .push(label);
+                }
                 Multiple(hits) => {
                     label.set_unresolved(hits);
-                    proc_block.unresolved.multiple.get_or_insert_with(Vec::new).push(label);
-                },
+                    proc_block
+                        .unresolved
+                        .multiple
+                        .get_or_insert_with(Vec::new)
+                        .push(label);
+                }
                 Single(block) => {
                     if let Some(ovl_labels) = label_set.overlays.get_mut(&block) {
                         println!(
                             "{:8}Found single label from '{}' into '{}': {:x?}",
                             "", &block_name, &block, &label
                         );
-                        proc_block.label_loc_cache
+                        proc_block
+                            .label_loc_cache
                             .insert(addr, LabelPlace::External(block.clone()));
                         ovl_labels.entry(addr).or_insert_with(|| {
                             println!("{:10}Label not found; inserted!", "");
@@ -259,8 +276,7 @@ fn pass1_external_labels<'c>(
                             "{:8}Found global label from '{}' into '{}': {:x?}",
                             "", &block_name, &block, &label
                         );
-                        proc_block.label_loc_cache
-                            .insert(addr, LabelPlace::Global);
+                        proc_block.label_loc_cache.insert(addr, LabelPlace::Global);
                         label_set.globals.entry(addr).or_insert_with(|| {
                             println!("{:10}Global label not found; inserted!", "");
                             label.set_global();
@@ -270,9 +286,22 @@ fn pass1_external_labels<'c>(
                 }
             }
         }
-        let unres = proc_block.unresolved.multiple.as_ref().map(Vec::len).unwrap_or(0);
-        let notfound = proc_block.unresolved.not_found.as_ref().map(Vec::len).unwrap_or(0);
-        println!("{:4}Ended with {} unresovled labels and {} not found labels", "", unres, notfound);
+        let unres = proc_block
+            .unresolved
+            .multiple
+            .as_ref()
+            .map(Vec::len)
+            .unwrap_or(0);
+        let notfound = proc_block
+            .unresolved
+            .not_found
+            .as_ref()
+            .map(Vec::len)
+            .unwrap_or(0);
+        println!(
+            "{:4}Ended with {} unresovled labels and {} not found labels",
+            "", unres, notfound
+        );
 
         output.push(proc_block);
     }
@@ -311,7 +340,7 @@ fn pass2_multi_labels(block: &mut ProcessedBlock, label_set: &mut LabelSet) {
                 "", label.addr, label.kind, &found_in
             );
             println!("{:8}Used to be in {:x?}", "", &label.location);
-            
+
             let addr = label.addr;
             match found_in.len() {
                 // `label` was not in any other blocks, so can't reduce possibilities
@@ -321,12 +350,12 @@ fn pass2_multi_labels(block: &mut ProcessedBlock, label_set: &mut LabelSet) {
                     cache.insert(addr, LabelPlace::MultipleExtern);
                     acc.push(label);
                 }
-                // `label` (address and type) is present in exactly one other block. 
+                // `label` (address and type) is present in exactly one other block.
                 // Nothing to do with the label, but update the label's location in the cache
                 1 => {
                     let loc = found_in[0].clone();
                     cache.insert(addr, LabelPlace::External(loc));
-                },
+                }
                 // A matching `Label` was found in >1 other blocks. Reduce the possibilites
                 // for this label
                 _ => {
@@ -342,12 +371,15 @@ fn pass2_multi_labels(block: &mut ProcessedBlock, label_set: &mut LabelSet) {
     if let Some(multiple) = block.unresolved.multiple.take() {
         let max = multiple.len();
 
-        println!("Second pass on multi-block labels from {}", &block.info.name);
+        println!(
+            "Second pass on multi-block labels from {}",
+            &block.info.name
+        );
         let fitlered_mutliple = multiple
             .into_iter()
             .map(find_label_already_in_blocks)
             .fold(Vec::with_capacity(max), fold_new_multilabels);
 
-            block.unresolved.multiple.replace(fitlered_mutliple);
+        block.unresolved.multiple.replace(fitlered_mutliple);
     }
 }

@@ -1,5 +1,5 @@
+use crate::disasm::labels::{LabelSet, LabelSetErr};
 use crate::disasm::memmap::{BlockKind, CodeBlock, MemoryMap, MemoryMapErr};
-use crate::disasm::{LabelSet, LabelSetErr};
 use err_derive::Error;
 use serde::Deserialize;
 use std::collections::HashMap;

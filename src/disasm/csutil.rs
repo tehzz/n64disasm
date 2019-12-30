@@ -1,7 +1,7 @@
 //! Utilities for dealing with capstone issues and warts
 use crate::disasm::{
     instruction::Instruction,
-    mipsvals::{INS_ADDU, INS_MOVE, INS_OR, INS_MTC0, INS_MFC0},
+    mipsvals::{INS_ADDU, INS_MFC0, INS_MOVE, INS_MTC0, INS_OR},
 };
 use capstone::{arch::mips::MipsOperand, arch::mips::MipsReg::*, prelude::*};
 
@@ -18,7 +18,7 @@ pub fn correct_insn(insn: &mut Instruction) {
     match insn.id.0 {
         INS_MOVE => fix_move(insn),
         INS_MTC0 | INS_MFC0 => fix_cop0_moves(insn),
-        _ => ()
+        _ => (),
     };
 }
 
@@ -30,7 +30,11 @@ fn fix_move(insn: &mut Instruction) {
     // MIPS 'addu' insn:     0000 00ss ssst tttt dddd d000 0010 0001  => 33
     const INSN_MASK: u32 = 0b1111_1100_0000_0000_0000_0111_1111_1111;
 
-    assert!(insn.id.0 == INS_MOVE, "tried to move fix a not move instruction\n{:?}", &insn);
+    assert!(
+        insn.id.0 == INS_MOVE,
+        "tried to move fix a not move instruction\n{:?}",
+        &insn
+    );
 
     insn.mnemonic.clear();
     match insn.raw & INSN_MASK {
@@ -78,22 +82,22 @@ mod test {
     use super::*;
 
     const ADDU_INSNS: [u8; 2 * 4] = [
-        0x01,0x40,0x48,0x21, // addu t1, t2, r0
-        0x03,0x00,0x80,0x21, // addu s0, t8, r0
+        0x01, 0x40, 0x48, 0x21, // addu t1, t2, r0
+        0x03, 0x00, 0x80, 0x21, // addu s0, t8, r0
     ];
 
     const OR_INSNS: [u8; 2 * 4] = [
-        0x03,0x00,0x80,0x25, // or s0, t8, r0
-        0x00,0x80,0x10,0x25, // or v0, a0, r0
+        0x03, 0x00, 0x80, 0x25, // or s0, t8, r0
+        0x00, 0x80, 0x10, 0x25, // or v0, a0, r0
     ];
 
     const MOV_COP0_INSNS: [u8; 6 * 4] = [
-        0x40,0x0c,0x60,0x00, // mfc0 $t4, $4
-        0x40,0x8c,0x60,0x00, // mtc0 $t4, $4
-        0x40,0x9b,0x60,0x00, // mtc0 $k1, $4
-        0x40,0x08,0x68,0x00, // mfc0 $t0, $5
-        0x40,0x0b,0x00,0x00, // mfc0 $t3, $0
-        0x40,0x80,0x28,0x00, // mtc0 $zero, $5
+        0x40, 0x0c, 0x60, 0x00, // mfc0 $t4, $4
+        0x40, 0x8c, 0x60, 0x00, // mtc0 $t4, $4
+        0x40, 0x9b, 0x60, 0x00, // mtc0 $k1, $4
+        0x40, 0x08, 0x68, 0x00, // mfc0 $t0, $5
+        0x40, 0x0b, 0x00, 0x00, // mfc0 $t3, $0
+        0x40, 0x80, 0x28, 0x00, // mtc0 $zero, $5
     ];
 
     const MOV_COP0_MNEM: [(&'static str, &'static str); 6] = [
@@ -108,7 +112,8 @@ mod test {
     fn raw_to_instruction(raw: &[u8]) -> Vec<Instruction> {
         let cs = get_instance().expect("working Capstone");
 
-        let output = cs.disasm_all(raw, 0x80004000)
+        let output = cs
+            .disasm_all(raw, 0x80004000)
             .expect("valid instructions")
             .iter()
             .map(|i| {
@@ -117,7 +122,7 @@ mod test {
                     .expect("valid conversion from capstone instruction to custom instruction")
             })
             .collect();
-        
+
         output
     }
 
@@ -147,7 +152,9 @@ mod test {
 
     #[test]
     fn test_cop0_moves() {
-        let iter = raw_to_instruction(&MOV_COP0_INSNS).into_iter().zip(&MOV_COP0_MNEM);
+        let iter = raw_to_instruction(&MOV_COP0_INSNS)
+            .into_iter()
+            .zip(&MOV_COP0_MNEM);
 
         for (mut insn, parts) in iter {
             fix_cop0_moves(&mut insn);
