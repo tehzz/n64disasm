@@ -6,16 +6,30 @@ use crate::disasm::pass1::{
 };
 use std::collections::HashMap;
 
-/// The structure that collects addresses for labels as parsed instructions
-/// from capstone are folded at the end of pass1
+/// A collection of addresses and labels generated from parsing instructions.
+/// The labels in `internals` and `externals` are all not named, and will have
+/// auto-generated name. For named labels, the `config_labels` map  
 #[derive(Debug)]
 pub struct LabelState<'c> {
     name: &'c BlockName,
     range: &'c BlockRange,
+    /// global scope labels in the config
     config_global: &'c HashMap<u32, Label>,
+    /// labels in the config for this overlay (if applicable) 
     config_ovl: Option<&'c HashMap<u32, Label>>,
+    /// subroutines or data that are located in the current block
     pub internals: HashMap<u32, Label>,
-    pub externals: HashMap<u32, Label>, // subroutines or data that are not in the current block
+    /// subroutines or data that are not in the current block
+    pub externals: HashMap<u32, Label>,
+    /// Addresses that have labels in the config maps.
+    /// These labels will be either global or internal 
+    pub config_labels: HashMap<u32, ConfigLabelLoc>,
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum ConfigLabelLoc {
+    Internal,
+    Global,
 }
 
 impl<'c> LabelState<'c> {
@@ -29,6 +43,7 @@ impl<'c> LabelState<'c> {
             config_ovl: set.overlays.get(name),
             internals: HashMap::new(),
             externals: HashMap::new(),
+            config_labels: HashMap::new(),
         }
     }
 
@@ -55,12 +70,21 @@ impl<'c> LabelState<'c> {
 
     /// check if a given addr is a known label from the config file,
     /// either in the global label map, or in this overlay's map (if applicable)
-    fn is_in_config_labels(&self, addr: u32) -> bool {
-        self.config_global.contains_key(&addr)
-            || self
-                .config_ovl
-                .map(|s| s.contains_key(&addr))
-                .unwrap_or(false)
+    fn addr_in_config(&mut self, addr: u32) -> bool {
+        if self.config_labels.contains_key(&addr) {
+            true
+        }
+        else if self.config_global.contains_key(&addr) {
+            self.config_labels.insert(addr, ConfigLabelLoc::Global);
+            true
+        }
+        else if self.config_ovl.map(|s| s.contains_key(&addr)).unwrap_or(false) {
+            self.config_labels.insert(addr, ConfigLabelLoc::Internal);
+            true
+        } 
+        else {
+            false
+        }
     }
 
     /// check if a given addr is contained within this state's memory range
@@ -69,7 +93,7 @@ impl<'c> LabelState<'c> {
     }
 
     fn insert_local(&mut self, addr: u32) {
-        if self.is_in_config_labels(addr) {
+        if self.addr_in_config(addr) {
             return;
         }
 
@@ -79,7 +103,7 @@ impl<'c> LabelState<'c> {
         }
     }
     fn insert_subroutine(&mut self, addr: u32) {
-        if self.is_in_config_labels(addr) {
+        if self.addr_in_config(addr) {
             return;
         }
 
@@ -93,7 +117,7 @@ impl<'c> LabelState<'c> {
         }
     }
     fn insert_data(&mut self, addr: u32) {
-        if self.is_in_config_labels(addr) {
+        if self.addr_in_config(addr) {
             return;
         }
 

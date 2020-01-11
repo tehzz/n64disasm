@@ -41,19 +41,19 @@ pub enum Pass1Error {
 type P1Result<T> = Result<T, Pass1Error>;
 
 pub struct Pass1 {
-    memory_map: MemoryMap,
-    labels: LabelSet,
-    blocks: Vec<BlockInsn>,
-    not_found_labels: HashMap<u32, Label>,
+    pub memory_map: MemoryMap,
+    pub labels: LabelSet,
+    pub blocks: Vec<BlockInsn>,
+    pub not_found_labels: HashMap<u32, Label>,
 }
 
-struct BlockInsn {
-    instructions: Vec<Instruction>,
-    name: BlockName,
+pub struct BlockInsn {
+    pub instructions: Vec<Instruction>,
+    pub name: BlockName,
     /// Labels that could be in multiple other blocks
-    unresolved_labels: Option<HashMap<u32, Label>>,
+    pub unresolved_labels: Option<HashMap<u32, Label>>,
     /// Map of address to where the label for the address is
-    label_locations: HashMap<u32, LabelPlace>,
+    pub label_locations: HashMap<u32, LabelPlace>,
 }
 
 impl From<ResolvedBlock<'_>> for BlockInsn {
@@ -93,6 +93,19 @@ pub fn pass1(config: Config, rom: &Path) -> P1Result<Pass1> {
     let (blocks, not_found_labels) =
         resolvelabels::resolve(&mut config_labels, &memory_map, labeled_blocks);
     let instructions = blocks.into_iter().map(BlockInsn::from).collect();
+
+    println!("Global Labels ({}):", config_labels.globals.len());
+    for (_addr, label) in &config_labels.globals {
+        println!("{:4}{} << {:x?}", "", &label, &label);
+    }
+    println!("Overlayed Labels:");
+    for (block, set) in &config_labels.overlays {
+        println!("{:4}{} ({} labels):", "", &block, set.len());
+        for (_addr, label) in set {
+            println!("{:8}{} << {:x?}", "", &label, &label);
+        }
+    }
+
     let pass1 = Pass1 {
         memory_map,
         labels: config_labels,
@@ -151,6 +164,7 @@ fn process_block<'b>(
     let LabelState {
         internals: internal_labels,
         externals: external_labels,
+        config_labels,
         ..
     } = label_state;
 
@@ -159,6 +173,7 @@ fn process_block<'b>(
         info: block,
         internal_labels,
         external_labels,
+        config_labels,
     })
 }
 

@@ -21,6 +21,7 @@ use crate::disasm::{
     instruction::Instruction,
     labels::{Label, LabelSet},
     memmap::{AddrLocation, BlockName, CodeBlock, MemoryMap},
+    pass1::findlabels::ConfigLabelLoc,
 };
 use std::collections::HashMap;
 
@@ -91,6 +92,7 @@ pub struct LabeledBlock<'c> {
     pub info: &'c CodeBlock,
     pub internal_labels: HashMap<u32, Label>,
     pub external_labels: HashMap<u32, Label>,
+    pub config_labels: HashMap<u32, ConfigLabelLoc>,
 }
 
 impl<'c> LabeledBlock<'c> {
@@ -100,14 +102,24 @@ impl<'c> LabeledBlock<'c> {
             info,
             internal_labels,
             external_labels,
+            config_labels,
         } = self;
-        let n = internal_labels.len() + external_labels.len();
+        let n = internal_labels.len() + external_labels.len() + config_labels.len();
+        let config_iter = config_labels
+            .into_iter()
+            .map(|(addr, loc)| (addr, match loc {
+                ConfigLabelLoc::Internal => LabelPlace::Internal,
+                ConfigLabelLoc::Global => LabelPlace::Global,
+            }));
+
         let label_loc_cache =
             internal_labels
                 .keys()
                 .copied()
-                .fold(HashMap::with_capacity(n), |mut map, addr| {
-                    map.insert(addr, LabelPlace::Internal);
+                .map(|addr| (addr, LabelPlace::Internal))
+                .chain(config_iter)
+                .fold(HashMap::with_capacity(n), |mut map, l| {
+                    map.insert(l.0, l.1);
                     map
                 });
 

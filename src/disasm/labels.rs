@@ -2,8 +2,9 @@ use crate::config::RawLabel;
 use crate::disasm::memmap::BlockName;
 use err_derive::Error;
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq, Clone)]
 pub enum LabelKind {
     // branch target, typically
     Local,
@@ -14,7 +15,7 @@ pub enum LabelKind {
     Named(String),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum LabelLoc {
     // Initial state of a label
     Unspecified,
@@ -26,7 +27,7 @@ pub enum LabelLoc {
     Multiple(Vec<BlockName>),
     // label's location is within the memory region that could map to multiple overlays
     UnresolvedMultiple(Vec<BlockName>),
-    // label doesn't map into any known memory region. Could be
+    // label doesn't map into any known memory region. Could be MMIO, or an issue with label parsing
     NotFound,
 }
 
@@ -38,7 +39,7 @@ impl From<Option<&BlockName>> for LabelLoc {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Label {
     pub addr: u32,
     pub kind: LabelKind,
@@ -124,6 +125,32 @@ impl From<RawLabel> for Label {
     }
 }
 
+impl fmt::Display for Label {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use LabelKind::*;
+        use LabelLoc::*;
+
+        match self.kind {
+            Routine => write!(f, "func"),
+            Data => write!(f, "D"),
+            Local => return write!(f, ".L{:08X}", self.addr),
+            Named(ref name) => return f.write_str(&name),
+        }?;
+
+        // write prefix and address for Routine and Data Labels
+        match self.location {
+            Overlayed(ref block) => write!(f, "_{}_", block),
+            Unspecified => write!(f, "_unspec_"),
+            Global => write!(f, "_"),
+            NotFound => write!(f, "_NF_"),
+            Multiple(..) => write!(f, "_multiple_"),
+            UnresolvedMultiple(..) => write!(f, "_unkmulti_"),
+        }?;
+
+        write!(f, "{:08X}", self.addr)
+    }
+}
+
 #[derive(Debug)]
 pub struct LabelSet {
     // map from vaddr to label
@@ -171,6 +198,12 @@ impl LabelSet {
             globals: global_labels,
             overlays: overlays_labels,
         })
+    }
+
+    /// Get the set of labels for `name`. This will be either a specific set
+    /// of overlayed labels or the global set
+    pub fn get_block_map(&self, name: &BlockName) -> &HashMap<u32, Label> {
+        self.overlays.get(name).unwrap_or(&self.globals)
     }
 }
 
