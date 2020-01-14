@@ -41,8 +41,11 @@ impl Link {
 pub enum LinkedVal {
     Empty,
     Pointer(Link),
+    PtrLui(Link),
+    PtrEmbed(Link),
     PtrOff(Link, i16),
     Immediate(Link),
+    ImmLui(Link),
     Float(Link),
 }
 
@@ -57,8 +60,11 @@ impl LinkedVal {
         match self {
             Self::Empty => None,
             Self::Pointer(l) => Some(*l),
+            Self::PtrLui(l) => Some(*l),
+            Self::PtrEmbed(l) => Some(*l),
             Self::PtrOff(l, _) => Some(*l),
             Self::Immediate(l) => Some(*l),
+            Self::ImmLui(l) => Some(*l),
             Self::Float(l) => Some(*l),
         }
     }
@@ -82,6 +88,16 @@ impl fmt::Display for LinkedVal {
                 "Pointer to {:08x} at instruction {}",
                 l.value, l.instruction
             ),
+            Self::PtrLui(l) => write!(
+                f,
+                "Upper load of pointer to {:08x} at instruction {}",
+                l.value, l.instruction
+            ),
+            Self::PtrEmbed(l) => write!(
+                f,
+                "Embedded lower of pointer to {:08x} at instruction {}",
+                l.value, l.instruction
+            ),
             Self::PtrOff(l, o) => write!(
                 f,
                 "Pointer to {:08x} with offset {} at instruction {}",
@@ -90,6 +106,11 @@ impl fmt::Display for LinkedVal {
             Self::Immediate(l) => write!(
                 f,
                 "Immediate value {:08x} at instruction {}",
+                l.value, l.instruction
+            ),
+            Self::ImmLui(l) => write!(
+                f,
+                "Upper load of immediate value {:08x} at instruction {}",
                 l.value, l.instruction
             ),
             Self::Float(l) => write!(
@@ -189,18 +210,20 @@ pub fn link_instructions<'s, 'i>(
                 return Ok(None);
             }
 
-            Ok(reg_state.get_mut(&dst).and_then(|state| match *state {
+            let links = reg_state.get_mut(&dst).and_then(|state| match *state {
                 Upper(_reg, upper, prior) => {
                     let ptr = add_imms(upper, imm);
                     *state = Loaded(dst, ptr);
 
-                    let lui_insn = Pointer(Link::new(ptr, prior));
+                    let lui_insn = PtrLui(Link::new(ptr, prior));
                     let lower_insn = Pointer(Link::new(ptr, offset));
                     Some(lui_insn.into_iter().chain(lower_insn))
                 }
-                // TODO: either calculate a new pointer, or reset state
-                Loaded(..) => None,
-            }))
+                // Reuse of previously loaded upper, probably.
+                Loaded(_reg, val) => None,
+            });
+
+            Ok(links)
         }
         // The `ori` instruction is emitted with a matched `lui` for large immediate values
         INS_ORI => {
@@ -214,7 +237,7 @@ pub fn link_instructions<'s, 'i>(
                     let val = or_imms(upper, imm);
                     *state = Loaded(dst, val);
 
-                    let lui_insn = Immediate(Link::new(val, prior));
+                    let lui_insn = ImmLui(Link::new(val, prior));
                     let lower_insn = Immediate(Link::new(val, offset));
                     Some(lui_insn.into_iter().chain(lower_insn))
                 }
@@ -261,8 +284,8 @@ pub fn link_instructions<'s, 'i>(
                     let ptr = add_imms(upper, imm);
                     *state = Loaded(reg, ptr);
 
-                    let lui = Pointer(Link::new(ptr, prior));
-                    let mem = Pointer(Link::new(ptr, prior));
+                    let lui = PtrLui(Link::new(ptr, prior));
+                    let mem = PtrEmbed(Link::new(ptr, offset));
                     Some(lui.into_iter().chain(mem))
                 }
                 Loaded(_reg, ptr) => {

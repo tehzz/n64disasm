@@ -15,14 +15,14 @@ pub struct LabelState<'c> {
     range: &'c BlockRange,
     /// global scope labels in the config
     config_global: &'c HashMap<u32, Label>,
-    /// labels in the config for this overlay (if applicable) 
+    /// labels in the config for this overlay (if applicable)
     config_ovl: Option<&'c HashMap<u32, Label>>,
     /// subroutines or data that are located in the current block
     pub internals: HashMap<u32, Label>,
     /// subroutines or data that are not in the current block
     pub externals: HashMap<u32, Label>,
     /// Addresses that have labels in the config maps.
-    /// These labels will be either global or internal 
+    /// These labels will be either global or internal
     pub config_labels: HashMap<u32, ConfigLabelLoc>,
 }
 
@@ -63,8 +63,10 @@ impl<'c> LabelState<'c> {
         };
         //TODO: early return?
         match insn.linked {
-            Pointer(Link { value, .. }) | PtrOff(Link { value, .. }, ..) => self.insert_data(value),
-            _ => (),
+            Pointer(Link { value, .. }) 
+            | PtrOff(Link { value, .. }, ..)
+            | PtrEmbed(Link { value, ..} ) => self.insert_data(value),
+            Empty | PtrLui(..) | Immediate(..) | ImmLui(..) | Float(..)  => (),
         }
     }
 
@@ -73,16 +75,17 @@ impl<'c> LabelState<'c> {
     fn addr_in_config(&mut self, addr: u32) -> bool {
         if self.config_labels.contains_key(&addr) {
             true
-        }
-        else if self.config_global.contains_key(&addr) {
+        } else if self.config_global.contains_key(&addr) {
             self.config_labels.insert(addr, ConfigLabelLoc::Global);
             true
-        }
-        else if self.config_ovl.map(|s| s.contains_key(&addr)).unwrap_or(false) {
+        } else if self
+            .config_ovl
+            .map(|s| s.contains_key(&addr))
+            .unwrap_or(false)
+        {
             self.config_labels.insert(addr, ConfigLabelLoc::Internal);
             true
-        } 
-        else {
+        } else {
             false
         }
     }

@@ -55,4 +55,12 @@ impl Instruction {
             linked: LinkedVal::Empty,
         })
     }
+
+    /// Remove the immediate op (`ori r1, r0, 10`) from the op string (`ori r1, r0`) 
+    /// to allow for replacement with the `LinkedVal` from `linked`
+    pub fn truncate_op_imm(&self) -> Option<&str> {
+        self.op_str.as_ref().and_then(|s| {
+            s.rfind(',').map(|i| &s[..i])
+        })
+    }
 }

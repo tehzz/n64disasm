@@ -42,6 +42,12 @@ impl Borrow<str> for BlockName {
     }
 }
 
+impl AsRef<str> for BlockName {
+    fn as_ref(&self) -> &str {
+        AsRef::as_ref(&self.0)
+    }
+}
+
 /// Type alias for a set that goes from an overlay name to a set of all other
 /// overlays that could possibly be loaded with that overlay.
 pub type OverlaySet = HashMap<BlockName, HashSet<BlockName>>;

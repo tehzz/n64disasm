@@ -58,13 +58,14 @@ pub fn disasm_all(config: Config, opts: Opts) -> Result<(), DisasmError> {
 /// If the user doesn't provide a output directory for the set of generated ASM files,
 /// try to use the name of the config file to make a generic output location
 fn default_output_dir(config: &Path) -> Option<PathBuf> {
-    use std::ffi::OsStr;
+    use std::ffi::OsString;
 
     let name = config.file_stem();
-    let mut base = OsStr::new("output-").to_os_string();
+    let mut base = OsString::new();
 
     name.map(move |n| {
         base.push(n);
+        base.push(".split");
         base.into()
     })
 }

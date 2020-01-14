@@ -105,23 +105,25 @@ impl<'c> LabeledBlock<'c> {
             config_labels,
         } = self;
         let n = internal_labels.len() + external_labels.len() + config_labels.len();
-        let config_iter = config_labels
-            .into_iter()
-            .map(|(addr, loc)| (addr, match loc {
-                ConfigLabelLoc::Internal => LabelPlace::Internal,
-                ConfigLabelLoc::Global => LabelPlace::Global,
-            }));
+        let config_iter = config_labels.into_iter().map(|(addr, loc)| {
+            (
+                addr,
+                match loc {
+                    ConfigLabelLoc::Internal => LabelPlace::Internal,
+                    ConfigLabelLoc::Global => LabelPlace::Global,
+                },
+            )
+        });
 
-        let label_loc_cache =
-            internal_labels
-                .keys()
-                .copied()
-                .map(|addr| (addr, LabelPlace::Internal))
-                .chain(config_iter)
-                .fold(HashMap::with_capacity(n), |mut map, l| {
-                    map.insert(l.0, l.1);
-                    map
-                });
+        let label_loc_cache = internal_labels
+            .keys()
+            .copied()
+            .map(|addr| (addr, LabelPlace::Internal))
+            .chain(config_iter)
+            .fold(HashMap::with_capacity(n), |mut map, l| {
+                map.insert(l.0, l.1);
+                map
+            });
 
         (
             ExternLabeledBlock {
