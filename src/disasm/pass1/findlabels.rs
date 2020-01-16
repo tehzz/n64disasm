@@ -66,7 +66,7 @@ impl<'c> LabelState<'c> {
             Pointer(Link { value, .. }) 
             | PtrOff(Link { value, .. }, ..)
             | PtrEmbed(Link { value, ..} ) => self.insert_data(value),
-            Empty | PtrLui(..) | Immediate(..) | ImmLui(..) | Float(..)  => (),
+            Empty | PtrLui(..) | Immediate(..) | ImmLui(..) | Float(..) | FloatLoad(..) => (),
         }
     }
 

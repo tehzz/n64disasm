@@ -47,6 +47,7 @@ pub enum LinkedVal {
     Immediate(Link),
     ImmLui(Link),
     Float(Link),
+    FloatLoad(Link),
 }
 
 impl LinkedVal {
@@ -66,6 +67,7 @@ impl LinkedVal {
             Self::Immediate(l) => Some(*l),
             Self::ImmLui(l) => Some(*l),
             Self::Float(l) => Some(*l),
+            Self::FloatLoad(l) => Some(*l),
         }
     }
 }
@@ -116,6 +118,13 @@ impl fmt::Display for LinkedVal {
             Self::Float(l) => write!(
                 f,
                 "Float {:.5} ({:08x}) at instruction {}",
+                f32::from_bits(l.value),
+                l.value,
+                l.instruction
+            ),
+            Self::FloatLoad(l) => write!(
+                f,
+                "Use of float {:.5} ({:08x}) at instruction {}",
                 f32::from_bits(l.value),
                 l.value,
                 l.instruction
@@ -261,12 +270,12 @@ pub fn link_instructions<'s, 'i>(
                 Upper(_reg, val, prior) => {
                     let val = (val as u32) << 16;
                     let upper = Float(Link::new(val, prior));
-                    let mtc1 = Float(Link::new(val, offset));
+                    let mtc1 = FloatLoad(Link::new(val, offset));
 
                     Some(upper.into_iter().chain(mtc1))
                 }
                 Loaded(_reg, val) => {
-                    let mtc1 = Float(Link::new(val, offset));
+                    let mtc1 = FloatLoad(Link::new(val, offset));
                     Some(mtc1.into_iter().chain(Empty))
                 }
             }))
@@ -282,6 +291,7 @@ pub fn link_instructions<'s, 'i>(
             Ok(reg_state.get_mut(&base).and_then(|state| match *state {
                 Upper(reg, upper, prior) => {
                     let ptr = add_imms(upper, imm);
+                    // todo: change state if load instr loads value into `reg`
                     *state = Loaded(reg, ptr);
 
                     let lui = PtrLui(Link::new(ptr, prior));

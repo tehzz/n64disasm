@@ -51,7 +51,7 @@ pub fn pass2(p1result: Pass1, out: &Path) -> P2Result<()> {
     let macro_path = out.join("macros.inc");
     fs::write(&macro_path, ASM_INCLUDE_MACROS).map_err(E::MacroInc)?;
 
-    for block in blocks.into_iter().skip(1).take(2) {
+    for block in blocks.into_iter().skip(1).take(3) {
         let name: &str = &block.name;
         let out_base = block_output_dir(out, name);
         fs::create_dir_all(&out_base)?;
@@ -103,6 +103,8 @@ pub enum AsmWriteError {
     UnspecifiedLabel(u32, Label),
     #[error(display = "Couldn't print instruction at {:08x} due to missing op string", _0)]
     MissingOpString(u32),
+    #[error(display = "Instruction at {:08x} did not have expect load/store op string", _0)]
+    BadLS(u32),
 }
 
 fn write_block_asm(
@@ -140,7 +142,7 @@ fn write_block_asm(
             match label.kind {
                 Local => writeln!(wtr, "{:2}{}:", "", &label)?,
                 Routine | Named(..) => writeln!(wtr, "glabel {}", &label)?,
-                Data => writeln!(wtr, "glabel {}   # Routine label incorrectly parsed as data", &label)?,
+                Data => writeln!(wtr, "glabel {}   # Routine parsed as data", &label)?,
             }
         }
 
@@ -188,18 +190,38 @@ fn write_linked_insn(
             write!(w, "{}, ${}({:#08X}) # Warning: couldn't find matching label", op, f, l.value)
         }
     };
+    let write_label_offset = |w: &mut BufWriter<File>, l: Link, o| {
+        if let Some(label) = find_label(l.value) {
+            write!(w, "{} # {} + {}", full_op, label, o)
+        } else {
+            write!(w, "{} # {:#08X} + {}", full_op, l.value, o)
+        }
+    };
 
     match insn.linked {
-        Immediate(l) => write!(wtr, "{}, ({v:#X} & 0xFFFF) # Immediate {v}", op, v = l.value)?,
-        ImmLui(l) => write!(wtr, "{}, ({v:#X} >> 16) # Immediate {v}", op, v = l.value)?,
-        PtrLui(l) => write_label(wtr, "hi", l)?,
         Pointer(l) => write_label(wtr, "lo", l)?,
-        PtrOff(l, o) => write!(wtr, "{} # {:#08X} + {}", full_op, l.value, o)?,
+        PtrLui(l) => write_label(wtr, "hi", l)?,
+        PtrOff(l, o) => write_label_offset(wtr, l, o)?,
+        PtrEmbed(l) => write_embed_ptr(wtr, l, insn, &find_label)?,
+        Immediate(l) => write!(wtr, "{}, ({v:#X} & 0xFFFF) # {v}", op, v = l.value)?,
+        ImmLui(l) => write!(wtr, "{}, ({v:#X} >> 16) # {v}", op, v = l.value)?,
+        Float(l) => write!(wtr, "{}, {:#08X} # {}", op, l.value, f32::from_bits(l.value))?,
         Empty => unreachable!(),
         _ => write!(wtr, "{} # TODO {}", insn.op_str.as_ref().unwrap(), &insn.linked)?,
     };
 
     Ok(())
+}
+
+fn write_embed_ptr<'f>(w: &mut BufWriter<File>, l: Link, insn: &Instruction, find_label: impl Fn(u32) -> Option<&'f Label>) -> Result<(), AsmWriteError> {
+    let (dst, base) = insn.ls_components().ok_or_else(|| AsmWriteError::BadLS(insn.vaddr))?;
+    let val = l.value;
+
+    if let Some(label) = find_label(val) {
+        write!(w, "{}, %lo({}){}", dst, label, base)
+    } else {
+        write!(w, "{}, %lo({:#08X}){}", dst, val, base)
+    }.map_err(Into::into)
 }
 
 fn write_jump_target(
@@ -220,7 +242,7 @@ fn write_jump_target(
     match target.location {
         Global | Overlayed(..) => write!(wtr, "{}", target).map_err(Into::into),
         Multiple(ref blocks) => {
-            write!(wtr, "{}    # possible labels: ", target)?;
+            write!(wtr, "{} # possible labels: ", target)?;
             blocks
                 .iter()
                 .filter_map(find_ovl_labels)
@@ -230,7 +252,7 @@ fn write_jump_target(
                 .map_err(Into::into)
         }
         UnresolvedMultiple(ref blocks) => {
-            write!(wtr, "{}    # located somewhere in: ", target)?;
+            write!(wtr, "{} # located somewhere in: ", target)?;
             blocks
                 .iter()
                 .try_for_each(|ovl| {
@@ -238,7 +260,7 @@ fn write_jump_target(
                 })
                 .map_err(Into::into)
         }
-        NotFound => write!(wtr, "{}    # couldn't be resolved", target).map_err(Into::into),
+        NotFound => write!(wtr, "{} # couldn't be resolved", target).map_err(Into::into),
         Unspecified => Err(UnspecifiedLabel(addr, target.clone())),
     }
 }
