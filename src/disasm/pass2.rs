@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Error)]
 pub enum Pass2Error {
     #[error(display = "Unable to create output directory for {}", _0)]
-    BlockOut(String, #[error(source)] io::Error),
+    BlockOut(BlockName, #[error(source)] io::Error),
     #[error(display = "Unable to write macro.inc file")]
     MacroInc(#[error(source)] io::Error),
     #[error(display = "Unable to disassemble asm for {}", _0)]
@@ -54,7 +54,8 @@ pub fn pass2(p1result: Pass1, out: &Path) -> P2Result<()> {
     for block in blocks.into_iter().skip(1).take(3) {
         let name: &str = &block.name;
         let out_base = block_output_dir(out, name);
-        fs::create_dir_all(&out_base)?;
+        fs::create_dir_all(&out_base)
+            .map_err(|e| E::BlockOut(block.name.clone(), e))?;
 
         let block_os = OsStr::new(name);
         let asm_filename = {
@@ -80,8 +81,6 @@ pub enum AsmWriteError {
     NoBlockInfo(BlockName),
     #[error(display = "Issue writing asm to output")]
     Io(#[error(source)] io::Error),
-    #[error(display = "Address {:08x} associated with data label: {:x?}", _0, _1)]
-    DataLabel(u32, Label),
     #[error(
         display = "Unknown instruction combination for finding label: {:x?}",
         _0
@@ -178,19 +177,20 @@ fn write_linked_insn(
     insn: &Instruction,
 ) -> Result<(), AsmWriteError> {
     use LinkedVal::*;
+    type Wtr<'a> = &'a mut BufWriter<File>;
 
     let op = insn.truncate_op_imm().ok_or_else(|| AsmWriteError::MissingOpString(insn.vaddr))?;
     let full_op = insn.op_str.as_ref().ok_or_else(|| AsmWriteError::MissingOpString(insn.vaddr))?;
     
     let find_label = |addr| find_label(mem, block, addr);
-    let write_label = |w: &mut BufWriter<File>, f, l: Link| {
+    let write_label = |w: Wtr, f, l: Link| {
         if let Some(label) = find_label(l.value) {
             write!(w, "{}, %{}({})", op, f, label)
         } else {
             write!(w, "{}, ${}({:#08X}) # Warning: couldn't find matching label", op, f, l.value)
         }
     };
-    let write_label_offset = |w: &mut BufWriter<File>, l: Link, o| {
+    let write_label_offset = |w: Wtr, l: Link, o| {
         if let Some(label) = find_label(l.value) {
             write!(w, "{} # {} + {}", full_op, label, o)
         } else {
@@ -201,13 +201,13 @@ fn write_linked_insn(
     match insn.linked {
         Pointer(l) => write_label(wtr, "lo", l)?,
         PtrLui(l) => write_label(wtr, "hi", l)?,
-        PtrOff(l, o) => write_label_offset(wtr, l, o)?,
         PtrEmbed(l) => write_embed_ptr(wtr, l, insn, &find_label)?,
+        PtrOff(l, o) => write_label_offset(wtr, l, o)?,
         Immediate(l) => write!(wtr, "{}, ({v:#X} & 0xFFFF) # {v}", op, v = l.value)?,
         ImmLui(l) => write!(wtr, "{}, ({v:#X} >> 16) # {v}", op, v = l.value)?,
         Float(l) => write!(wtr, "{}, {:#08X} # {}", op, l.value, f32::from_bits(l.value))?,
+        FloatLoad(l) => write!(wtr, "{} # moved float {} to cop1", op, f32::from_bits(l.value))?,
         Empty => unreachable!(),
-        _ => write!(wtr, "{} # TODO {}", insn.op_str.as_ref().unwrap(), &insn.linked)?,
     };
 
     Ok(())

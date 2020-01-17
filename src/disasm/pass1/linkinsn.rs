@@ -128,7 +128,7 @@ impl fmt::Display for LinkedVal {
                 f32::from_bits(l.value),
                 l.value,
                 l.instruction
-            ),
+            )
         }
     }
 }
@@ -137,6 +137,7 @@ impl fmt::Display for LinkedVal {
 enum LuiState {
     Upper(RegId, i16, usize),
     Loaded(RegId, u32),
+    ReadInto(RegId, u32),
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -227,9 +228,11 @@ pub fn link_instructions<'s, 'i>(
                     let lui_insn = PtrLui(Link::new(ptr, prior));
                     let lower_insn = Pointer(Link::new(ptr, offset));
                     Some(lui_insn.into_iter().chain(lower_insn))
-                }
+                },
                 // Reuse of previously loaded upper, probably.
-                Loaded(_reg, val) => None,
+                Loaded(_reg, _val) => None,
+                // Actual computation on a loaded value, probably
+                ReadInto(..) => None,
             });
 
             Ok(links)
@@ -249,9 +252,11 @@ pub fn link_instructions<'s, 'i>(
                     let lui_insn = ImmLui(Link::new(val, prior));
                     let lower_insn = Immediate(Link::new(val, offset));
                     Some(lui_insn.into_iter().chain(lower_insn))
-                }
+                },
                 // TODO: either calculate a new offset, or reset state
                 Loaded(..) => None,
+                // Actual computation on a loaded value, probably
+                ReadInto(..) => None,
             }))
         }
         // Float constants (singles) are loaded by setting the upper bits with a `lui`,
@@ -273,11 +278,15 @@ pub fn link_instructions<'s, 'i>(
                     let mtc1 = FloatLoad(Link::new(val, offset));
 
                     Some(upper.into_iter().chain(mtc1))
-                }
+                },
                 Loaded(_reg, val) => {
+                    // reset the ori instructions...?
                     let mtc1 = FloatLoad(Link::new(val, offset));
                     Some(mtc1.into_iter().chain(Empty))
-                }
+                },
+                // pointer was deferenced to load something into cop1. 
+                // could be a float constant, or an integer to be converted 
+                ReadInto(..) => None,
             }))
         }
         // If a pointer is deferenced, the lower 16bit can be embedded in a load or store
@@ -285,24 +294,38 @@ pub fn link_instructions<'s, 'i>(
         // can be loaded into a register and then offset by the load/store.
         INS_SD | INS_SW | INS_SH | INS_SB | INS_LB | INS_LBU | INS_LH | INS_LHU | INS_LW
         | INS_LWU | INS_LWC1 | INS_LWC2 | INS_LWC3 | INS_SWC1 | INS_SWC2 | INS_SWC3 | INS_LD
-        | INS_LDL | INS_LDR => {
-            let (base, imm) = get_mem_offset(&insn)?;
+        | INS_LDL | INS_LDR | INS_LWL | INS_LWR => {
+            let (dst, base, imm) = get_mem_offset(&insn)?;
+            let reused_base = is_grp_load(insn.id) && dst == base;
 
-            Ok(reg_state.get_mut(&base).and_then(|state| match *state {
+            let links = reg_state.get_mut(&base).and_then(|state| match *state {
                 Upper(reg, upper, prior) => {
                     let ptr = add_imms(upper, imm);
-                    // todo: change state if load instr loads value into `reg`
-                    *state = Loaded(reg, ptr);
+                    
+                    *state = if reused_base {
+                        ReadInto(reg, ptr)
+                    } else {
+                        Loaded(reg, ptr)
+                    };
 
                     let lui = PtrLui(Link::new(ptr, prior));
                     let mem = PtrEmbed(Link::new(ptr, offset));
                     Some(lui.into_iter().chain(mem))
-                }
-                Loaded(_reg, ptr) => {
+                },
+                Loaded(reg, ptr) => {
                     let mem = PtrOff(Link::new(ptr, offset), imm);
+                    
+                    if reused_base {
+                        *state = ReadInto(reg, ptr);
+                    }
+
                     Some(mem.into_iter().chain(Empty))
-                }
-            }))
+                },
+                // typical computation, probably
+                ReadInto(..) => None
+            });
+
+            Ok(links)
         }
         _ => Ok(None), // or, check if register is overwritten?
     }
@@ -358,11 +381,14 @@ fn get_lui_ops(insn: &Instruction) -> Result<(RegId, i16), LinkInsnErr> {
 }
 
 /// Get the base register and offset for a load or store instruction
-fn get_mem_offset(insn: &Instruction) -> Result<(RegId, i16), LinkInsnErr> {
+fn get_mem_offset(insn: &Instruction) -> Result<(RegId, RegId, i16), LinkInsnErr> {
     use LinkInsnErr::MissingInsnComponent as IErr;
     use MipsOperand::Mem;
 
-    insn.operands
+    let dst = get_reg_n(&insn.operands, 0)
+        .ok_or_else(|| IErr(insn.clone(), "dst for load or store"))?;
+
+    let (base, disp) = insn.operands
         .iter()
         .find_map(|op| {
             if let Mem(mem) = op {
@@ -371,5 +397,7 @@ fn get_mem_offset(insn: &Instruction) -> Result<(RegId, i16), LinkInsnErr> {
                 None
             }
         })
-        .ok_or_else(|| IErr(insn.clone(), "mem info for load or store"))
+        .ok_or_else(|| IErr(insn.clone(), "mem info for load or store"))?;
+
+    Ok((dst, base, disp))
 }

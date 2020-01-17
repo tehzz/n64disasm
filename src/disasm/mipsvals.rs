@@ -1,6 +1,6 @@
 use capstone::arch::mips::MipsInsn::*;
 use capstone::arch::mips::MipsReg::*;
-use capstone::RegId;
+use capstone::{RegId, InsnId};
 
 // Useful instructions from Capstone C enum
 pub const INS_MOVE: u32 = MIPS_INS_MOVE as u32;
@@ -32,12 +32,31 @@ pub const INS_LH: u32 = MIPS_INS_LH as u32;
 pub const INS_LHU: u32 = MIPS_INS_LHU as u32;
 pub const INS_LW: u32 = MIPS_INS_LW as u32;
 pub const INS_LWU: u32 = MIPS_INS_LWU as u32;
+pub const INS_LWL: u32 = MIPS_INS_LWL as u32;
+pub const INS_LWR: u32 = MIPS_INS_LWR as u32;
 pub const INS_LWC1: u32 = MIPS_INS_LWC1 as u32;
 pub const INS_LWC2: u32 = MIPS_INS_LWC2 as u32;
 pub const INS_LWC3: u32 = MIPS_INS_LWC3 as u32;
 pub const INS_SWC1: u32 = MIPS_INS_SWC1 as u32;
 pub const INS_SWC2: u32 = MIPS_INS_SWC2 as u32;
 pub const INS_SWC3: u32 = MIPS_INS_SWC3 as u32;
+
+pub fn is_grp_load(id: InsnId) -> bool {
+    match id.0 {
+        INS_LB
+        | INS_LBU
+        | INS_LD
+        | INS_LDL
+        | INS_LDR
+        | INS_LH
+        | INS_LHU
+        | INS_LW
+        | INS_LWU
+        | INS_LWL
+        | INS_LWR => true,
+        _ => false,
+    }
+}
 
 // Callee Saved Registers
 pub const CALLEE_SAVED_REGS: [RegId; 10] = [
