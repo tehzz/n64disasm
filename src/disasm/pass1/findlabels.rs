@@ -63,9 +63,9 @@ impl<'c> LabelState<'c> {
         };
         //TODO: early return?
         match insn.linked {
-            Pointer(Link { value, .. }) 
+            Pointer(Link { value, .. })
             | PtrOff(Link { value, .. }, ..)
-            | PtrEmbed(Link { value, ..} ) => self.insert_data(value),
+            | PtrEmbed(Link { value, .. }) => self.insert_data(value),
             Empty | PtrLui(..) | Immediate(..) | ImmLui(..) | Float(..) | FloatLoad(..) => (),
         }
     }

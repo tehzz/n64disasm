@@ -1,6 +1,6 @@
 use capstone::arch::mips::MipsInsn::*;
 use capstone::arch::mips::MipsReg::*;
-use capstone::{RegId, InsnId};
+use capstone::{InsnId, RegId};
 
 // Useful instructions from Capstone C enum
 pub const INS_MOVE: u32 = MIPS_INS_MOVE as u32;
@@ -43,17 +43,8 @@ pub const INS_SWC3: u32 = MIPS_INS_SWC3 as u32;
 
 pub fn is_grp_load(id: InsnId) -> bool {
     match id.0 {
-        INS_LB
-        | INS_LBU
-        | INS_LD
-        | INS_LDL
-        | INS_LDR
-        | INS_LH
-        | INS_LHU
-        | INS_LW
-        | INS_LWU
-        | INS_LWL
-        | INS_LWR => true,
+        INS_LB | INS_LBU | INS_LD | INS_LDL | INS_LDR | INS_LH | INS_LHU | INS_LW | INS_LWU
+        | INS_LWL | INS_LWR => true,
         _ => false,
     }
 }

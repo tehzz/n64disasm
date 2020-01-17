@@ -128,7 +128,7 @@ impl fmt::Display for LinkedVal {
                 f32::from_bits(l.value),
                 l.value,
                 l.instruction
-            )
+            ),
         }
     }
 }
@@ -228,7 +228,7 @@ pub fn link_instructions<'s, 'i>(
                     let lui_insn = PtrLui(Link::new(ptr, prior));
                     let lower_insn = Pointer(Link::new(ptr, offset));
                     Some(lui_insn.into_iter().chain(lower_insn))
-                },
+                }
                 // Reuse of previously loaded upper, probably.
                 Loaded(_reg, _val) => None,
                 // Actual computation on a loaded value, probably
@@ -252,7 +252,7 @@ pub fn link_instructions<'s, 'i>(
                     let lui_insn = ImmLui(Link::new(val, prior));
                     let lower_insn = Immediate(Link::new(val, offset));
                     Some(lui_insn.into_iter().chain(lower_insn))
-                },
+                }
                 // TODO: either calculate a new offset, or reset state
                 Loaded(..) => None,
                 // Actual computation on a loaded value, probably
@@ -278,14 +278,14 @@ pub fn link_instructions<'s, 'i>(
                     let mtc1 = FloatLoad(Link::new(val, offset));
 
                     Some(upper.into_iter().chain(mtc1))
-                },
+                }
                 Loaded(_reg, val) => {
                     // reset the ori instructions...?
                     let mtc1 = FloatLoad(Link::new(val, offset));
                     Some(mtc1.into_iter().chain(Empty))
-                },
-                // pointer was deferenced to load something into cop1. 
-                // could be a float constant, or an integer to be converted 
+                }
+                // pointer was deferenced to load something into cop1.
+                // could be a float constant, or an integer to be converted
                 ReadInto(..) => None,
             }))
         }
@@ -301,7 +301,7 @@ pub fn link_instructions<'s, 'i>(
             let links = reg_state.get_mut(&base).and_then(|state| match *state {
                 Upper(reg, upper, prior) => {
                     let ptr = add_imms(upper, imm);
-                    
+
                     *state = if reused_base {
                         ReadInto(reg, ptr)
                     } else {
@@ -311,18 +311,18 @@ pub fn link_instructions<'s, 'i>(
                     let lui = PtrLui(Link::new(ptr, prior));
                     let mem = PtrEmbed(Link::new(ptr, offset));
                     Some(lui.into_iter().chain(mem))
-                },
+                }
                 Loaded(reg, ptr) => {
                     let mem = PtrOff(Link::new(ptr, offset), imm);
-                    
+
                     if reused_base {
                         *state = ReadInto(reg, ptr);
                     }
 
                     Some(mem.into_iter().chain(Empty))
-                },
+                }
                 // typical computation, probably
-                ReadInto(..) => None
+                ReadInto(..) => None,
             });
 
             Ok(links)
@@ -385,10 +385,11 @@ fn get_mem_offset(insn: &Instruction) -> Result<(RegId, RegId, i16), LinkInsnErr
     use LinkInsnErr::MissingInsnComponent as IErr;
     use MipsOperand::Mem;
 
-    let dst = get_reg_n(&insn.operands, 0)
-        .ok_or_else(|| IErr(insn.clone(), "dst for load or store"))?;
+    let dst =
+        get_reg_n(&insn.operands, 0).ok_or_else(|| IErr(insn.clone(), "dst for load or store"))?;
 
-    let (base, disp) = insn.operands
+    let (base, disp) = insn
+        .operands
         .iter()
         .find_map(|op| {
             if let Mem(mem) = op {

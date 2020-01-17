@@ -2,7 +2,7 @@ use crate::disasm::{
     instruction::Instruction,
     labels::{Label, LabelKind, LabelLoc, LabelSet},
     memmap::{BlockName, MemoryMap},
-    pass1::{BlockInsn, JumpKind, LabelPlace, LinkedVal, Link, Pass1},
+    pass1::{BlockInsn, JumpKind, LabelPlace, Link, LinkedVal, Pass1},
 };
 use err_derive::Error;
 use std::collections::HashMap;
@@ -54,8 +54,7 @@ pub fn pass2(p1result: Pass1, out: &Path) -> P2Result<()> {
     for block in blocks.into_iter().skip(1).take(3) {
         let name: &str = &block.name;
         let out_base = block_output_dir(out, name);
-        fs::create_dir_all(&out_base)
-            .map_err(|e| E::BlockOut(block.name.clone(), e))?;
+        fs::create_dir_all(&out_base).map_err(|e| E::BlockOut(block.name.clone(), e))?;
 
         let block_os = OsStr::new(name);
         let asm_filename = {
@@ -100,9 +99,15 @@ pub enum AsmWriteError {
         _1
     )]
     UnspecifiedLabel(u32, Label),
-    #[error(display = "Couldn't print instruction at {:08x} due to missing op string", _0)]
+    #[error(
+        display = "Couldn't print instruction at {:08x} due to missing op string",
+        _0
+    )]
     MissingOpString(u32),
-    #[error(display = "Instruction at {:08x} did not have expect load/store op string", _0)]
+    #[error(
+        display = "Instruction at {:08x} did not have expect load/store op string",
+        _0
+    )]
     BadLS(u32),
 }
 
@@ -179,15 +184,24 @@ fn write_linked_insn(
     use LinkedVal::*;
     type Wtr<'a> = &'a mut BufWriter<File>;
 
-    let op = insn.truncate_op_imm().ok_or_else(|| AsmWriteError::MissingOpString(insn.vaddr))?;
-    let full_op = insn.op_str.as_ref().ok_or_else(|| AsmWriteError::MissingOpString(insn.vaddr))?;
-    
+    let op = insn
+        .truncate_op_imm()
+        .ok_or_else(|| AsmWriteError::MissingOpString(insn.vaddr))?;
+    let full_op = insn
+        .op_str
+        .as_ref()
+        .ok_or_else(|| AsmWriteError::MissingOpString(insn.vaddr))?;
+
     let find_label = |addr| find_label(mem, block, addr);
     let write_label = |w: Wtr, f, l: Link| {
         if let Some(label) = find_label(l.value) {
             write!(w, "{}, %{}({})", op, f, label)
         } else {
-            write!(w, "{}, ${}({:#08X}) # Warning: couldn't find matching label", op, f, l.value)
+            write!(
+                w,
+                "{}, ${}({:#08X}) # Warning: couldn't find matching label",
+                op, f, l.value
+            )
         }
     };
     let write_label_offset = |w: Wtr, l: Link, o| {
@@ -205,23 +219,42 @@ fn write_linked_insn(
         PtrOff(l, o) => write_label_offset(wtr, l, o)?,
         Immediate(l) => write!(wtr, "{}, ({v:#X} & 0xFFFF) # {v}", op, v = l.value)?,
         ImmLui(l) => write!(wtr, "{}, ({v:#X} >> 16) # {v}", op, v = l.value)?,
-        Float(l) => write!(wtr, "{}, {:#08X} # {}", op, l.value, f32::from_bits(l.value))?,
-        FloatLoad(l) => write!(wtr, "{} # moved float {} to cop1", op, f32::from_bits(l.value))?,
+        Float(l) => write!(
+            wtr,
+            "{}, {:#08X} # {}",
+            op,
+            l.value,
+            f32::from_bits(l.value)
+        )?,
+        FloatLoad(l) => write!(
+            wtr,
+            "{} # moved float {} to cop1",
+            op,
+            f32::from_bits(l.value)
+        )?,
         Empty => unreachable!(),
     };
 
     Ok(())
 }
 
-fn write_embed_ptr<'f>(w: &mut BufWriter<File>, l: Link, insn: &Instruction, find_label: impl Fn(u32) -> Option<&'f Label>) -> Result<(), AsmWriteError> {
-    let (dst, base) = insn.ls_components().ok_or_else(|| AsmWriteError::BadLS(insn.vaddr))?;
+fn write_embed_ptr<'f>(
+    w: &mut BufWriter<File>,
+    l: Link,
+    insn: &Instruction,
+    find_label: impl Fn(u32) -> Option<&'f Label>,
+) -> Result<(), AsmWriteError> {
+    let (dst, base) = insn
+        .ls_components()
+        .ok_or_else(|| AsmWriteError::BadLS(insn.vaddr))?;
     let val = l.value;
 
     if let Some(label) = find_label(val) {
         write!(w, "{}, %lo({}){}", dst, label, base)
     } else {
         write!(w, "{}, %lo({:#08X}){}", dst, val, base)
-    }.map_err(Into::into)
+    }
+    .map_err(Into::into)
 }
 
 fn write_jump_target(
@@ -243,20 +276,24 @@ fn write_jump_target(
         Global | Overlayed(..) => write!(wtr, "{}", target).map_err(Into::into),
         Multiple(ref blocks) => {
             write!(wtr, "{} # possible labels: ", target)?;
+
+            #[cfg_attr(rustfmt, rustfmt_skip)]
             blocks
                 .iter()
                 .filter_map(find_ovl_labels)
                 .try_for_each(|l| {
-                    write!( wtr, "{}{}", if comma { ", " } else { comma = true; "" }, l )
+                    write!(wtr, "{}{}", if comma {", "} else {comma = true; ""}, l)
                 })
                 .map_err(Into::into)
         }
         UnresolvedMultiple(ref blocks) => {
             write!(wtr, "{} # located somewhere in: ", target)?;
+
+            #[cfg_attr(rustfmt, rustfmt_skip)]
             blocks
                 .iter()
                 .try_for_each(|ovl| {
-                    write!( wtr, "{}{}", if comma { ", " } else { comma = true; "" }, ovl )
+                    write!(wtr, "{}{}", if comma {", "} else {comma = true; ""}, ovl)
                 })
                 .map_err(Into::into)
         }

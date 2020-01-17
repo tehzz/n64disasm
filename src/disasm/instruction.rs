@@ -56,21 +56,20 @@ impl Instruction {
         })
     }
 
-    /// Remove the immediate op (`ori r1, r0, 10`) from the op string (`ori r1, r0`) 
+    /// Remove the immediate op (`ori r1, r0, 10`) from the op string (`ori r1, r0`)
     /// to allow for replacement with the `LinkedVal` from `linked`
     pub fn truncate_op_imm(&self) -> Option<&str> {
-        self.op_str.as_ref().and_then(|s| {
-            s.rfind(',').map(|i| &s[..i])
-        })
+        self.op_str
+            .as_ref()
+            .and_then(|s| s.rfind(',').map(|i| &s[..i]))
     }
 
     /// provide the dst and base for a load or store op string (`dst, offset(base)`)
     /// the base is wrapped in parentheses
     pub fn ls_components(&self) -> Option<(&str, &str)> {
-        self.op_str.as_ref().and_then(|s| {
-            s.find(',').map(|i| (&s[..i], s))
-        }).and_then(|(dst, s)| {
-            s.find('(').map(|i| (dst, &s[i..]))
-        })
+        self.op_str
+            .as_ref()
+            .and_then(|s| s.find(',').map(|i| (&s[..i], s)))
+            .and_then(|(dst, s)| s.find('(').map(|i| (dst, &s[i..])))
     }
 }
