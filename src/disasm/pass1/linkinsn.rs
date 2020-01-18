@@ -10,6 +10,18 @@ pub enum LinkInsnErr {
     MissingInsnComponent(Instruction, &'static str),
 }
 
+#[derive(Debug, Copy, Clone)]
+pub struct Link {
+    pub value: u32,
+    pub instruction: usize,
+}
+
+impl Link {
+    fn new(value: u32, instruction: usize) -> Self {
+        Self { value, instruction }
+    }
+}
+
 #[derive(Debug)]
 pub struct LinkState {
     registers: HashMap<RegId, LuiState>,
@@ -22,18 +34,6 @@ impl LinkState {
             registers: HashMap::with_capacity(64),
             pc_delay_slot: DelaySlot::Inactive,
         }
-    }
-}
-
-#[derive(Debug, Copy, Clone)]
-pub struct Link {
-    pub value: u32,
-    pub instruction: usize,
-}
-
-impl Link {
-    fn new(value: u32, instruction: usize) -> Self {
-        Self { value, instruction }
     }
 }
 
@@ -51,10 +51,10 @@ pub enum LinkedVal {
 }
 
 impl LinkedVal {
-    pub fn is_empty(&self) -> bool {
+    pub fn is_not_empty(&self) -> bool {
         match self {
-            Self::Empty => true,
-            _ => false,
+            Self::Empty => false,
+            _ => true,
         }
     }
     pub fn get_link(&self) -> Option<Link> {
@@ -166,8 +166,36 @@ impl DelaySlot {
     }
 }
 
+/// Check for any links between `insn` and prior `instructions`. 
+/// After any links have been resolved, store and return a reference to `insn`.
+pub fn link_instructions<'a>(
+    state: &mut LinkState,
+    insn: Instruction,
+    offset: usize,
+    instructions: &'a mut Vec<Instruction>,
+) -> Result<&'a Instruction, LinkInsnErr> {
+    let maybe_links = generate_insn_links(state, &insn, offset)?;
+    
+    instructions.push(insn);
+
+    if let Some(links) = maybe_links {
+        for link in links.filter(LinkedVal::is_not_empty) {
+            let insn_offset = link
+                .get_link()
+                .expect("no empty linked values")
+                .instruction;
+            
+            instructions[insn_offset].linked = link;
+        }
+    }
+
+    let last_insn = instructions.last().expect("always >1 instruction when linking");
+    
+    Ok(last_insn)
+}
+
 // TODO: have an instruction limit (<90?) for pointers just in case
-pub fn link_instructions<'s, 'i>(
+fn generate_insn_links<'s, 'i>(
     state: &'s mut LinkState,
     insn: &'i Instruction,
     offset: usize,
