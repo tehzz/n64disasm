@@ -6,7 +6,7 @@ use crate::disasm::{
 };
 use err_derive::Error;
 use std::collections::HashMap;
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fs::{self, File};
 use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
@@ -16,7 +16,11 @@ pub enum Pass2Error {
     #[error(display = "Unable to create output directory for {}", _0)]
     BlockOut(BlockName, #[error(source)] io::Error),
     #[error(display = "Unable to write macro.inc file")]
-    MacroInc(#[error(source)] io::Error),
+    MacroInc(#[error(source, no_from)] io::Error),
+    #[error(display = "Unable to write not-found-sym.ld file")]
+    NFSym(#[error(source, no_from)] io::Error),
+    #[error(display = "Io issue")]
+    Io(#[error(source)] io::Error),
     #[error(display = "Unable to disassemble asm for {}", _0)]
     AsmError(BlockName, #[error(source)] AsmWriteError),
 }
@@ -51,17 +55,17 @@ pub fn pass2(p1result: Pass1, out: &Path) -> P2Result<()> {
     let macro_path = out.join("macros.inc");
     fs::write(&macro_path, ASM_INCLUDE_MACROS).map_err(E::MacroInc)?;
 
+    let nf_syms = out.join("not-found-sym.ld");
+    write_notfound_symbols(&nf_syms, &info.not_found_labels)
+        .map_err(E::NFSym)?;
+
     for block in blocks.into_iter().skip(1).take(3) {
         let name: &str = &block.name;
         let out_base = block_output_dir(out, name);
         fs::create_dir_all(&out_base).map_err(|e| E::BlockOut(block.name.clone(), e))?;
 
         let block_os = OsStr::new(name);
-        let asm_filename = {
-            let mut f = block_os.to_os_string();
-            f.push(".text.s");
-            f
-        };
+        let asm_filename = make_filename(&block_os, ".text.s");
         let mut asm_file = BufWriter::new(File::create(&out_base.join(&asm_filename))?);
         write_block_asm(&mut asm_file, &block, &info)
             .map_err(|e| E::AsmError(block.name.clone(), e))?;
@@ -70,8 +74,25 @@ pub fn pass2(p1result: Pass1, out: &Path) -> P2Result<()> {
     todo!()
 }
 
+fn write_notfound_symbols(p: &Path, syms: &HashMap<u32, Label>) -> io::Result<()> {
+    let mut f = BufWriter::new(File::create(p)?);
+
+    writeln!(&mut f, "/* Unable-to-be-Found Symbols */\n")?;
+    for (addr, label) in syms {
+        writeln!(&mut f, "{} = {:#08X};", label, addr)?;
+    }
+
+    Ok(())
+}
+
 fn block_output_dir(base: &Path, block: &str) -> PathBuf {
     base.to_path_buf().join(block)
+}
+
+fn make_filename(base: &OsStr, ending: &str) -> OsString {
+    let mut f = base.to_os_string();
+    f.push(ending);
+    f
 }
 
 #[derive(Debug, Error)]
