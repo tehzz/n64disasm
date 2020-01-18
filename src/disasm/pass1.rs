@@ -2,6 +2,7 @@ mod findlabels;
 mod jumps;
 mod linkinsn;
 mod resolvelabels;
+mod routinenl;
 
 use crate::config::Config;
 use crate::disasm::{
@@ -21,6 +22,7 @@ use std::path::Path;
 
 use findlabels::LabelState;
 use resolvelabels::LabeledBlock;
+use routinenl::{NLState, newline_between_routines};
 
 pub use jumps::JumpKind;
 pub use linkinsn::{Link, LinkedVal};
@@ -133,21 +135,20 @@ fn process_block<'b>(
     let label_state = LabelState::from_config(&block.range, &labels, &block.name);
     let pass1_state = FoldInsnState::new(num_insn, label_state);
 
-    let FoldInsnState {
-        instructions,
-        label_state,
-        ..
-    } = cs_instructions
+    let processed = cs_instructions
         .iter()
         .map(|i| {
             let detail = cs.insn_detail(&i)?;
             Instruction::from_components(&i, &detail)
         })
-        .scan(NLState::Clear, |s, res| {
-            Some(res.map(|i| indicate_newlines(s, i)))
-        })
         .enumerate()
         .try_fold(pass1_state, fold_instructions)?;
+
+    let FoldInsnState {
+        instructions,
+        label_state,
+        ..
+    } = processed;
 
     let LabelState {
         internals: internal_labels,
@@ -170,6 +171,7 @@ struct FoldInsnState<'c> {
     instructions: Vec<Instruction>,
     link_state: LinkState,
     label_state: LabelState<'c>,
+    nl_state: NLState,
 }
 
 impl<'c> FoldInsnState<'c> {
@@ -178,6 +180,7 @@ impl<'c> FoldInsnState<'c> {
             instructions: Vec::with_capacity(insn_size),
             link_state: LinkState::new(),
             label_state: labels,
+            nl_state: NLState::default(),
         }
     }
 }
@@ -188,6 +191,7 @@ fn fold_instructions(
 ) -> P1Result<FoldInsnState> {
     let mut insn = insn?;
     csutil::correct_insn(&mut insn);
+    newline_between_routines(&mut state.nl_state, &mut insn);
 
     // link any symbols in this instruction with prior instructions
     let insn_ref = link_instructions(&mut state.link_state, insn, offset, &mut state.instructions)?;
@@ -196,30 +200,4 @@ fn fold_instructions(
     state.label_state.check_instruction(insn_ref);
 
     Ok(state)
-}
-
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
-enum NLState {
-    Clear,
-    Delay,
-    NewLine,
-}
-
-// shouldn't have a jump in the delay slot of a jump, as that is undefined in MIPS.
-// So, there's no worry about overlapping jump/branches... right?
-fn indicate_newlines(state: &mut NLState, mut insn: Instruction) -> Instruction {
-    use NLState::*;
-
-    insn.new_line = *state == NewLine;
-
-    *state = match state {
-        Delay => NewLine,
-        Clear | NewLine => match insn.jump {
-            JumpKind::Jump(_) => Delay,
-            JumpKind::JumpRegister(_) if insn.jump.is_jrra() => Delay,
-            _ => Clear,
-        },
-    };
-
-    insn
 }
