@@ -3,6 +3,7 @@ use capstone::arch::mips::MipsReg::*;
 use capstone::{InsnId, RegId};
 
 // Useful instructions from Capstone C enum
+pub const INS_NOP: u32 = MIPS_INS_NOP as u32;
 pub const INS_MOVE: u32 = MIPS_INS_MOVE as u32;
 pub const INS_OR: u32 = MIPS_INS_OR as u32;
 pub const INS_ADDU: u32 = MIPS_INS_ADDU as u32;

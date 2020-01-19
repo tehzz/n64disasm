@@ -2,7 +2,7 @@ use crate::disasm::{
     instruction::Instruction,
     labels::{Label, LabelKind, LabelLoc, LabelSet},
     memmap::{BlockName, MemoryMap},
-    pass1::{BlockInsn, JumpKind, LabelPlace, Link, LinkedVal, Pass1},
+    pass1::{BlockInsn, JumpKind, LabelPlace, Link, LinkedVal, Pass1, FileBreak},
 };
 use err_derive::Error;
 use std::collections::HashMap;
@@ -59,7 +59,7 @@ pub fn pass2(p1result: Pass1, out: &Path) -> P2Result<()> {
     write_notfound_symbols(&nf_syms, &info.not_found_labels)
         .map_err(E::NFSym)?;
 
-    for block in blocks.into_iter().skip(1).take(3) {
+    for block in blocks.into_iter().take(4) {
         let name: &str = &block.name;
         let out_base = block_output_dir(out, name);
         fs::create_dir_all(&out_base).map_err(|e| E::BlockOut(block.name.clone(), e))?;
@@ -160,6 +160,13 @@ fn write_block_asm(
         // typically between routines
         if insn.new_line {
             writeln!(wtr, "")?;
+        }
+
+        // mark if this instruction could be the start of a new file
+        match insn.file_break {
+            FileBreak::Likely => writeln!(wtr, "\n# Likely start of new file")?,
+            FileBreak::Possible => writeln!(wtr, "# Maybe start of new file")?,
+            FileBreak::Nope => (),
         }
 
         // label address if necessary

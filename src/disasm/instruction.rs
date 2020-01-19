@@ -1,5 +1,4 @@
-use crate::disasm::pass1::JumpKind;
-use crate::disasm::pass1::LinkedVal;
+use crate::disasm::pass1::{JumpKind, LinkedVal, FileBreak};
 use arrayvec::ArrayString;
 use capstone::{arch::mips::MipsOperand, prelude::*, Insn};
 use err_derive::Error;
@@ -26,6 +25,7 @@ pub struct Instruction {
     pub new_line: bool,
     pub jump: JumpKind,
     pub linked: LinkedVal,
+    pub file_break: FileBreak,
 }
 
 impl Instruction {
@@ -53,6 +53,7 @@ impl Instruction {
             new_line: false,
             jump: JumpKind::from((insn, detail)),
             linked: LinkedVal::Empty,
+            file_break: FileBreak::Nope,
         })
     }
 
