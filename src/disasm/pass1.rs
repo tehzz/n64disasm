@@ -24,7 +24,7 @@ use std::path::Path;
 use findfiles::FindFileState;
 use findlabels::LabelState;
 use resolvelabels::LabeledBlock;
-use routinenl::{newline_between_routines, NLState};
+use routinenl::NLState;
 
 pub use findfiles::FileBreak;
 pub use jumps::JumpKind;
@@ -196,7 +196,7 @@ fn fold_instructions(
 ) -> P1Result<FoldInsnState> {
     let mut insn = insn?;
     csutil::correct_insn(&mut insn);
-    newline_between_routines(&mut state.nl_state, &mut insn);
+    state.nl_state.newline_between_routines(&mut insn);
     state.file_state.find_file_gaps(&mut insn);
 
     // link any symbols in this instruction with prior instructions
