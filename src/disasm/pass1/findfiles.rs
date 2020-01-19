@@ -1,13 +1,10 @@
-use crate::disasm::{
-    instruction::Instruction,
-    mipsvals::INS_NOP,
-};
+use crate::disasm::{instruction::Instruction, mipsvals::INS_NOP};
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum FileBreak {
     Likely,
     Possible,
-    Nope, 
+    Nope,
 }
 
 #[derive(Debug)]
@@ -26,7 +23,10 @@ enum JrraStatus {
 
 impl Default for FindFileState {
     fn default() -> Self {
-        Self{ nops: 0, jrra: JrraStatus::Clear }
+        Self {
+            nops: 0,
+            jrra: JrraStatus::Clear,
+        }
     }
 }
 
@@ -61,10 +61,6 @@ impl FindFileState {
             (_, _, Clear) => Clear,
         };
 
-        self.nops = if is_nop {
-            self.nops + 1
-        } else {
-            0
-        };
+        self.nops = if is_nop { self.nops + 1 } else { 0 };
     }
 }

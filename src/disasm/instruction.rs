@@ -1,4 +1,4 @@
-use crate::disasm::pass1::{JumpKind, LinkedVal, FileBreak};
+use crate::disasm::pass1::{FileBreak, JumpKind, LinkedVal};
 use arrayvec::ArrayString;
 use capstone::{arch::mips::MipsOperand, prelude::*, Insn};
 use err_derive::Error;

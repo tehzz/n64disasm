@@ -166,7 +166,7 @@ impl DelaySlot {
     }
 }
 
-/// Check for any links between `insn` and prior `instructions`. 
+/// Check for any links between `insn` and prior `instructions`.
 /// After any links have been resolved, store and return a reference to `insn`.
 pub fn link_instructions<'a>(
     state: &mut LinkState,
@@ -175,22 +175,21 @@ pub fn link_instructions<'a>(
     instructions: &'a mut Vec<Instruction>,
 ) -> Result<&'a Instruction, LinkInsnErr> {
     let maybe_links = generate_insn_links(state, &insn, offset)?;
-    
+
     instructions.push(insn);
 
     if let Some(links) = maybe_links {
         for link in links.filter(LinkedVal::is_not_empty) {
-            let insn_offset = link
-                .get_link()
-                .expect("no empty linked values")
-                .instruction;
-            
+            let insn_offset = link.get_link().expect("no empty linked values").instruction;
+
             instructions[insn_offset].linked = link;
         }
     }
 
-    let last_insn = instructions.last().expect("always >1 instruction when linking");
-    
+    let last_insn = instructions
+        .last()
+        .expect("always >1 instruction when linking");
+
     Ok(last_insn)
 }
 

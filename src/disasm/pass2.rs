@@ -2,7 +2,7 @@ use crate::disasm::{
     instruction::Instruction,
     labels::{Label, LabelKind, LabelLoc, LabelSet},
     memmap::{BlockName, MemoryMap},
-    pass1::{BlockInsn, JumpKind, LabelPlace, Link, LinkedVal, Pass1, FileBreak},
+    pass1::{BlockInsn, FileBreak, JumpKind, LabelPlace, Link, LinkedVal, Pass1},
 };
 use err_derive::Error;
 use std::collections::HashMap;
@@ -56,8 +56,7 @@ pub fn pass2(p1result: Pass1, out: &Path) -> P2Result<()> {
     fs::write(&macro_path, ASM_INCLUDE_MACROS).map_err(E::MacroInc)?;
 
     let nf_syms = out.join("not-found-sym.ld");
-    write_notfound_symbols(&nf_syms, &info.not_found_labels)
-        .map_err(E::NFSym)?;
+    write_notfound_symbols(&nf_syms, &info.not_found_labels).map_err(E::NFSym)?;
 
     for block in blocks.into_iter().take(4) {
         let name: &str = &block.name;

@@ -1,8 +1,4 @@
-use crate::disasm::{
-    instruction::Instruction,
-    pass1::JumpKind,
-};
-
+use crate::disasm::{instruction::Instruction, pass1::JumpKind};
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum NLState {

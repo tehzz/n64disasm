@@ -1,9 +1,9 @@
+mod findfiles;
 mod findlabels;
 mod jumps;
 mod linkinsn;
 mod resolvelabels;
 mod routinenl;
-mod findfiles;
 
 use crate::config::Config;
 use crate::disasm::{
@@ -15,21 +15,21 @@ use crate::disasm::{
 use capstone::prelude::*;
 use err_derive::Error;
 use linkinsn::{link_instructions, LinkInsnErr, LinkState};
-use log::{info};
+use log::info;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
 
+use findfiles::FindFileState;
 use findlabels::LabelState;
 use resolvelabels::LabeledBlock;
-use routinenl::{NLState, newline_between_routines};
-use findfiles::FindFileState;
+use routinenl::{newline_between_routines, NLState};
 
+pub use findfiles::FileBreak;
 pub use jumps::JumpKind;
 pub use linkinsn::{Link, LinkedVal};
 pub use resolvelabels::{LabelPlace, ResolvedBlock};
-pub use findfiles::FileBreak;
 
 #[derive(Debug, Error)]
 pub enum Pass1Error {
