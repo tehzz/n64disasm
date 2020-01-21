@@ -58,7 +58,7 @@ pub fn pass2(p1result: Pass1, out: &Path) -> P2Result<()> {
     let nf_syms = out.join("not-found-sym.ld");
     write_notfound_symbols(&nf_syms, &info.not_found_labels).map_err(E::NFSym)?;
 
-    for block in blocks.into_iter().take(4) {
+    for block in blocks.into_iter().take(7) {
         let name: &str = &block.name;
         let out_base = block_output_dir(out, name);
         fs::create_dir_all(&out_base).map_err(|e| E::BlockOut(block.name.clone(), e))?;
@@ -68,6 +68,11 @@ pub fn pass2(p1result: Pass1, out: &Path) -> P2Result<()> {
         let mut asm_file = BufWriter::new(File::create(&out_base.join(&asm_filename))?);
         write_block_asm(&mut asm_file, &block, &info)
             .map_err(|e| E::AsmError(block.name.clone(), e))?;
+
+        //let data_filename = out_base.join(&make_filename(&block_os, ".data.ld"));
+        //let mut data_file = BufWriter::new(File::create(&data_filename)?);
+        //let bss_filename = out_base.join(&make_filename(&block_os, ".bss.ld"));
+        //let mut bss_file = BufWriter::new(File::create(&bss_filename)?);
     }
 
     todo!()
@@ -76,7 +81,7 @@ pub fn pass2(p1result: Pass1, out: &Path) -> P2Result<()> {
 fn write_notfound_symbols(p: &Path, syms: &HashMap<u32, Label>) -> io::Result<()> {
     let mut f = BufWriter::new(File::create(p)?);
 
-    writeln!(&mut f, "/* Unable-to-be-Found Symbols */\n")?;
+    writeln!(&mut f, "/* Unknown Symbols */\n")?;
     for (addr, label) in syms {
         writeln!(&mut f, "{} = {:#08X};", label, addr)?;
     }
@@ -94,41 +99,26 @@ fn make_filename(base: &OsStr, ending: &str) -> OsString {
     f
 }
 
+//fn write_data(labels: )
+
 #[derive(Debug, Error)]
 pub enum AsmWriteError {
     #[error(display = "Block name <{}> missing information", _0)]
     NoBlockInfo(BlockName),
     #[error(display = "Issue writing asm to output")]
     Io(#[error(source)] io::Error),
-    #[error(
-        display = "Unknown instruction combination for finding label: {:x?}",
-        _0
-    )]
+    #[error(display = "Unknown instruction type for printing: {:x?}", _0)]
     InsnLabel(Instruction),
     #[error(display = "Couldn't find target of branch to {:x}", _0)]
     BranchNotFound(u32),
-    #[error(
-        display = "Couldn't find target of jump to {:x}. Expected in {:?}",
-        _0,
-        _1
-    )]
+    #[error(display = "Couldn't find jump target {:x}. Expected in {:?}", _0, _1)]
     JumpNotFound(u32, Option<LabelPlace>),
-    #[error(
-        display = "Address {:08x} referred to an Unspecified label: {:?}",
-        _0,
-        _1
-    )]
+    #[error(display = "Address {:08x} referred to Unspecified label: {:?}", _0, _1)]
     UnspecifiedLabel(u32, Label),
-    #[error(
-        display = "Couldn't print instruction at {:08x} due to missing op string",
-        _0
-    )]
-    MissingOpString(u32),
-    #[error(
-        display = "Instruction at {:08x} did not have expect load/store op string",
-        _0
-    )]
-    BadLS(u32),
+    #[error(display = "Instruction did not have expected op string\n{:#x?}", _0)]
+    MissingOpString(Instruction),
+    #[error(display = "Expected load/store instruction, got\n{:#x?}", _0)]
+    BadLS(Instruction),
 }
 
 fn write_block_asm(
@@ -188,6 +178,13 @@ fn write_block_asm(
                 let target = find_branch(addr)?;
                 write!(wtr, "{}", target)?;
             }
+            (BranchCmp(addr), _, _) => {
+                let target = find_branch(addr)?;
+                let op = insn
+                    .truncate_op_imm()
+                    .ok_or_else(|| MissingOpString(insn.clone()))?;
+                write!(wtr, "{}, {}", op, target)?;
+            }
             (JAL(addr), _, _) | (Jump(addr), _, _) => {
                 write_jump_target(wtr, block, mem, addr)?;
             }
@@ -208,16 +205,17 @@ fn write_linked_insn(
     mem: &Memory,
     insn: &Instruction,
 ) -> Result<(), AsmWriteError> {
+    use AsmWriteError::*;
     use LinkedVal::*;
     type Wtr<'a> = &'a mut BufWriter<File>;
 
     let op = insn
         .truncate_op_imm()
-        .ok_or_else(|| AsmWriteError::MissingOpString(insn.vaddr))?;
+        .ok_or_else(|| MissingOpString(insn.clone()))?;
     let full_op = insn
         .op_str
         .as_ref()
-        .ok_or_else(|| AsmWriteError::MissingOpString(insn.vaddr))?;
+        .ok_or_else(|| MissingOpString(insn.clone()))?;
 
     let find_label = |addr| find_label(mem, block, addr);
     let write_label = |w: Wtr, f, l: Link| {
@@ -273,7 +271,7 @@ fn write_embed_ptr<'f>(
 ) -> Result<(), AsmWriteError> {
     let (dst, base) = insn
         .ls_components()
-        .ok_or_else(|| AsmWriteError::BadLS(insn.vaddr))?;
+        .ok_or_else(|| AsmWriteError::BadLS(insn.clone()))?;
     let val = l.value;
 
     if let Some(label) = find_label(val) {

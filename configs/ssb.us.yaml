@@ -21,6 +21,7 @@ base-overlays:
 # Regular overlays that are shuffled in and out of memory
 overlays:
   # [ romStart, romEnd,   name,       vaddr,   bssStart,     bssEnd ]
+  - [ 0x00040,  0x001000, boot,  0xA4000040 ]
   - [ 0xAC540,  0x1079C0, ovl3,  0x80131B00, 0x8018CF80, 0x8018D0C0 ]
   - [ 0x109FB0, 0x10B370, ovl4,  0x8018D0C0, 0x8018E480, 0x8018E7E0 ]
   - [ 0x10B370, 0x10B920, ovl5,  0x8018D0C0, 0x8018D670, 0x8018D950 ]
@@ -88,6 +89,7 @@ overlays:
 # This collection of sets can be used to help symbol resolution
 overlay-sets: 
   # Set Name:         [overlay1, overlay2, ...]
+  BooyCode:           [ boot ]
   N64Logo:            [ ovl11 ]
   TitleScreen:        [ ovl2, ovl10, ovl8, ovl9 ]
   DebugStageSelect:   [ ovl12, ovl8, ovl9 ]

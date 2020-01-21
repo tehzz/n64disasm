@@ -95,14 +95,14 @@ pub fn pass1(config: Config, rom: &Path) -> P1Result<Pass1> {
         .map(proc_insns)
         .collect::<P1Result<Vec<_>>>()?;
 
-    let (blocks, not_found_labels) =
+    let (resolved, not_found_labels) =
         resolvelabels::resolve(&mut config_labels, &memory_map, labeled_blocks);
-    let instructions = blocks.into_iter().map(BlockInsn::from).collect();
+    let blocks = resolved.into_iter().map(BlockInsn::from).collect();
 
     let pass1 = Pass1 {
         memory_map,
         labels: config_labels,
-        blocks: instructions,
+        blocks,
         not_found_labels,
     };
 

@@ -9,6 +9,7 @@ use capstone::{
 pub enum JumpKind {
     None,
     Branch(u32),
+    BranchCmp(u32),
     BAL(u32),
     Jump(u32),
     JAL(u32),
@@ -40,6 +41,7 @@ impl From<(&Insn<'_>, &InsnDetail<'_>)> for JumpKind {
         if !details.groups().any(|g| g.0 as u32 == MIPS_GRP_JUMP)
             && insn.id().0 != INS_JAL
             && insn.id().0 != INS_J
+            && insn.id().0 != INS_BAL
         {
             return Self::None;
         }
@@ -69,7 +71,9 @@ impl From<(&Insn<'_>, &InsnDetail<'_>)> for JumpKind {
                 INS_J => JumpKind::Jump(imm),
                 INS_JAL => JumpKind::JAL(imm),
                 INS_BAL => JumpKind::BAL(imm),
-                _ => JumpKind::Branch(imm),
+                INS_B | INS_BC1T | INS_BC1F | INS_BC1TL | INS_BC1FL => JumpKind::Branch(imm),
+                // all other branch on register compare (pseudo) instructions
+                _ => JumpKind::BranchCmp(imm),
             }
         } else if let Some(jr_target) = reg {
             // catch `jr XX` and `jalr XX`, but I don't think they make it here

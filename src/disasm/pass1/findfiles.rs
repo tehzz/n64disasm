@@ -61,6 +61,10 @@ impl FindFileState {
             (_, _, Clear) => Clear,
         };
 
-        self.nops = if is_nop { self.nops + 1 } else { 0 };
+        self.nops = if is_nop {
+            self.nops.saturating_add(1)
+        } else {
+            0
+        };
     }
 }

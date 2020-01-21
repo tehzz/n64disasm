@@ -57,9 +57,9 @@ impl<'c> LabelState<'c> {
         use LinkedVal::*;
 
         match insn.jump {
-            Branch(addr) | BAL(addr) => self.insert_local(addr),
+            Branch(addr) | BAL(addr) | BranchCmp(addr) => self.insert_local(addr),
             Jump(addr) | JAL(addr) => self.insert_subroutine(addr),
-            _ => (),
+            JumpRegister(..) | None => (),
         };
         //TODO: early return?
         match insn.linked {
