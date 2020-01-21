@@ -6,7 +6,7 @@ use crate::disasm::{
 };
 use err_derive::Error;
 use std::collections::HashMap;
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsStr;
 use std::fs::{self, File};
 use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
@@ -60,12 +60,12 @@ pub fn pass2(p1result: Pass1, out: &Path) -> P2Result<()> {
 
     for block in blocks.into_iter().take(7) {
         let name: &str = &block.name;
+        let name_os = OsStr::new(name);
+
         let out_base = block_output_dir(out, name);
         fs::create_dir_all(&out_base).map_err(|e| E::BlockOut(block.name.clone(), e))?;
 
-        let block_os = OsStr::new(name);
-        let asm_filename = make_filename(&block_os, ".text.s");
-        let mut asm_file = BufWriter::new(File::create(&out_base.join(&asm_filename))?);
+        let mut asm_file = make_file(&out_base, &name_os, ".text.s")?;
         write_block_asm(&mut asm_file, &block, &info)
             .map_err(|e| E::AsmError(block.name.clone(), e))?;
 
@@ -93,10 +93,11 @@ fn block_output_dir(base: &Path, block: &str) -> PathBuf {
     base.to_path_buf().join(block)
 }
 
-fn make_filename(base: &OsStr, ending: &str) -> OsString {
+fn make_file(dir: &Path, base: &OsStr, ending: &str) -> io::Result<BufWriter<File>> {
     let mut f = base.to_os_string();
     f.push(ending);
-    f
+
+    File::create(dir.join(&f)).map(BufWriter::new)
 }
 
 //fn write_data(labels: )
