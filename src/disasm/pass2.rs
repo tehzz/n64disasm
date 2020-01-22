@@ -1,7 +1,7 @@
 use crate::disasm::{
     instruction::Instruction,
     labels::{Label, LabelKind, LabelLoc, LabelSet},
-    memmap::{BlockName, MemoryMap},
+    memmap::{BlockKind, BlockName, CodeBlock, MemoryMap, Section},
     pass1::{BlockInsn, FileBreak, JumpKind, LabelPlace, Link, LinkedVal, Pass1},
 };
 use err_derive::Error;
@@ -21,6 +21,8 @@ pub enum Pass2Error {
     NFSym(#[error(source, no_from)] io::Error),
     #[error(display = "Io issue")]
     Io(#[error(source)] io::Error),
+    #[error(display = "Block name <{}> missing information", _0)]
+    NoBlockInfo(BlockName),
     #[error(display = "Unable to disassemble asm for {}", _0)]
     AsmError(BlockName, #[error(source)] AsmWriteError),
 }
@@ -59,20 +61,31 @@ pub fn pass2(p1result: Pass1, out: &Path) -> P2Result<()> {
     write_notfound_symbols(&nf_syms, &info.not_found_labels).map_err(E::NFSym)?;
 
     for block in blocks.into_iter().take(7) {
-        let name: &str = &block.name;
-        let name_os = OsStr::new(name);
+        let name = &block.name;
+        let name_str: &str = &name;
+        let name_os = OsStr::new(name_str);
+        let block_info = info
+            .memory_map
+            .get_block(name)
+            .ok_or_else(|| E::NoBlockInfo(name.clone()))?;
 
-        let out_base = block_output_dir(out, name);
-        fs::create_dir_all(&out_base).map_err(|e| E::BlockOut(block.name.clone(), e))?;
+        let out_base = block_output_dir(out, name_str);
+        fs::create_dir_all(&out_base).map_err(|e| E::BlockOut(name.clone(), e))?;
 
         let mut asm_file = make_file(&out_base, &name_os, ".text.s")?;
-        write_block_asm(&mut asm_file, &block, &info)
-            .map_err(|e| E::AsmError(block.name.clone(), e))?;
+        write_block_asm(&mut asm_file, &block, &info).map_err(|e| E::AsmError(name.clone(), e))?;
+
+        if block_info.kind != BlockKind::Global {
+            let mut bss_file = make_file(&out_base, &name_os, ".bss.s")?;
+            write_bss(
+                &mut bss_file,
+                info.label_set.get_block_map(name),
+                &block_info,
+            )?;
+        }
 
         //let data_filename = out_base.join(&make_filename(&block_os, ".data.ld"));
         //let mut data_file = BufWriter::new(File::create(&data_filename)?);
-        //let bss_filename = out_base.join(&make_filename(&block_os, ".bss.ld"));
-        //let mut bss_file = BufWriter::new(File::create(&bss_filename)?);
     }
 
     todo!()
@@ -102,10 +115,51 @@ fn make_file(dir: &Path, base: &OsStr, ending: &str) -> io::Result<BufWriter<Fil
 
 //fn write_data(labels: )
 
+fn write_bss(
+    f: &mut BufWriter<File>,
+    labels: &HashMap<u32, Label>,
+    block: &CodeBlock,
+) -> io::Result<()> {
+    let is_data = |(_, l): &(&u32, &Label)| l.kind == LabelKind::Data;
+    let is_bss = |(&a, _): &(&u32, &Label)| {
+        block
+            .range
+            .section(a)
+            .map(|s| s == Section::Bss)
+            .unwrap_or(false)
+    };
+    let bss_labels = {
+        let mut v: Vec<_> = labels.iter().filter(is_data).filter(is_bss).collect();
+        v.sort_unstable_by(|a, b| a.0.cmp(b.0));
+        v
+    };
+
+    // TODO: make into own file like .text prelude
+    writeln!(f, ".include \"macros.inc\"\n\n.section .bss\n")?;
+
+    let mut prior = None;
+    for (addr, label) in bss_labels {
+        if let Some(prior_addr) = prior {
+            let size = addr.saturating_sub(prior_addr);
+            assert!(size > 0, "{:08x} - {:08x}", addr, prior_addr);
+            writeln!(f, "{:4}.space {}", "", size)?;
+        }
+        writeln!(f, "glabel {}", label)?;
+        prior = Some(*addr);
+    }
+
+    if let Some(final_addr) = prior {
+        let (_, end) = block.range.get_bss().expect("writing bss");
+        let size = end.saturating_sub(final_addr);
+        assert!(size > 0);
+        writeln!(f, "{:4}.space {}", "", size)?;
+    }
+
+    Ok(())
+}
+
 #[derive(Debug, Error)]
 pub enum AsmWriteError {
-    #[error(display = "Block name <{}> missing information", _0)]
-    NoBlockInfo(BlockName),
     #[error(display = "Issue writing asm to output")]
     Io(#[error(source)] io::Error),
     #[error(display = "Unknown instruction type for printing: {:x?}", _0)]
@@ -133,10 +187,6 @@ fn write_block_asm(
     use LinkedVal::*;
 
     let name = &block.name;
-    let block_info = mem
-        .memory_map
-        .get_block(name)
-        .ok_or_else(|| NoBlockInfo(name.clone()))?;
 
     let internal_labels = mem.label_set.get_block_map(name);
     let find_branch = |addr| {

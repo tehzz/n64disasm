@@ -376,7 +376,12 @@ impl BlockRange {
         self.section(addr).is_some()
     }
 
-    fn section(&self, addr: u32) -> Option<Section> {
+    pub fn get_bss(&self) -> Option<(u32, u32)> {
+        self.bss_start
+            .and_then(|s| self.bss_end.map(|e| (s.get(), e.get())))
+    }
+
+    pub fn section(&self, addr: u32) -> Option<Section> {
         if self.ram_start <= addr && addr < self.ram_end {
             Some(Section::TextData)
         } else {
