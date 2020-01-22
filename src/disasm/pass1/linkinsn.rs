@@ -137,7 +137,7 @@ impl fmt::Display for LinkedVal {
 enum LuiState {
     Upper(RegId, i16, usize),
     Loaded(RegId, u32),
-    ReadInto(RegId, u32),
+    ReadInto(RegId),
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -323,34 +323,35 @@ fn generate_insn_links<'s, 'i>(
         | INS_LWU | INS_LWC1 | INS_LWC2 | INS_LWC3 | INS_SWC1 | INS_SWC2 | INS_SWC3 | INS_LD
         | INS_LDL | INS_LDR | INS_LWL | INS_LWR => {
             let (dst, base, imm) = get_mem_offset(&insn)?;
-            let reused_base = is_grp_load(insn.id) && dst == base;
+            let is_load_insn = is_grp_load(insn.id);
 
             let links = reg_state.get_mut(&base).and_then(|state| match *state {
                 Upper(reg, upper, prior) => {
                     let ptr = add_imms(upper, imm);
 
-                    *state = if reused_base {
-                        ReadInto(reg, ptr)
-                    } else {
-                        Loaded(reg, ptr)
-                    };
+                    *state = Loaded(reg, ptr);
 
                     let lui = PtrLui(Link::new(ptr, prior));
                     let mem = PtrEmbed(Link::new(ptr, offset));
                     Some(lui.into_iter().chain(mem))
                 }
-                Loaded(reg, ptr) => {
+                Loaded(_reg, ptr) => {
                     let mem = PtrOff(Link::new(ptr, offset), imm);
-
-                    if reused_base {
-                        *state = ReadInto(reg, ptr);
-                    }
 
                     Some(mem.into_iter().chain(Empty))
                 }
                 // typical computation, probably
                 ReadInto(..) => None,
             });
+
+            // reset the state of the register used for the load,
+            // This may change the state set above if dst == base
+            // which is needed to show that this register is now dirty.
+            if is_load_insn {
+                if let Some(state) = reg_state.get_mut(&dst) {
+                    *state = ReadInto(dst);
+                }
+            }
 
             Ok(links)
         }

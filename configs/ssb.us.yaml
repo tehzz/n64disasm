@@ -89,7 +89,7 @@ overlays:
 # This collection of sets can be used to help symbol resolution
 overlay-sets: 
   # Set Name:         [overlay1, overlay2, ...]
-  BooyCode:           [ boot ]
+  BootCode:           [ boot ]
   N64Logo:            [ ovl11 ]
   TitleScreen:        [ ovl2, ovl10, ovl8, ovl9 ]
   DebugStageSelect:   [ ovl12, ovl8, ovl9 ]

@@ -75,15 +75,14 @@ pub fn pass2(p1result: Pass1, out: &Path) -> P2Result<()> {
         let mut asm_file = make_file(&out_base, &name_os, ".text.s")?;
         write_block_asm(&mut asm_file, &block, &info).map_err(|e| E::AsmError(name.clone(), e))?;
 
-        if block_info.kind != BlockKind::Global {
-            let mut bss_file = make_file(&out_base, &name_os, ".bss.s")?;
-            write_bss(
-                &mut bss_file,
-                info.label_set.get_block_map(name),
-                &block_info,
-            )?;
-        }
-
+ 
+        let mut bss_file = make_file(&out_base, &name_os, ".bss.s")?;
+        write_bss(
+            &mut bss_file,
+            info.label_set.get_block_map(name),
+            &block_info,
+        )?;
+ 
         //let data_filename = out_base.join(&make_filename(&block_os, ".data.ld"));
         //let mut data_file = BufWriter::new(File::create(&data_filename)?);
     }
@@ -121,6 +120,7 @@ fn write_bss(
     block: &CodeBlock,
 ) -> io::Result<()> {
     let is_data = |(_, l): &(&u32, &Label)| l.kind == LabelKind::Data;
+    // this will only return valid labels for this block
     let is_bss = |(&a, _): &(&u32, &Label)| {
         block
             .range
@@ -128,9 +128,15 @@ fn write_bss(
             .map(|s| s == Section::Bss)
             .unwrap_or(false)
     };
+    // TODO: Vec<&Labels> only?
     let bss_labels = {
-        let mut v: Vec<_> = labels.iter().filter(is_data).filter(is_bss).collect();
-        v.sort_unstable_by(|a, b| a.0.cmp(b.0));
+        let mut v: Vec<(u32, &Label)> = labels
+            .iter()
+            .filter(is_data)
+            .filter(is_bss)
+            .map(|(a, l)| (*a, l))
+            .collect();
+        v.sort_unstable_by(|a, b| a.0.cmp(&b.0));
         v
     };
 
@@ -145,7 +151,7 @@ fn write_bss(
             writeln!(f, "{:4}.space {}", "", size)?;
         }
         writeln!(f, "glabel {}", label)?;
-        prior = Some(*addr);
+        prior = Some(addr);
     }
 
     if let Some(final_addr) = prior {
