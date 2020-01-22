@@ -207,6 +207,24 @@ impl LabelSet {
     }
 }
 
+impl fmt::Display for LabelSet {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        writeln!(f, "Global Labels ({}):", self.globals.len())?;
+        for (_addr, label) in &self.globals {
+            writeln!(f, "{:4}{} << {:x?}", "", &label, &label)?;
+        }
+        writeln!(f, "Overlayed Labels:")?;
+        for (block, set) in &self.overlays {
+            writeln!(f, "{:4}{} ({} labels):", "", &block, set.len())?;
+            for (_addr, label) in set {
+                writeln!(f, "{:8}{} << {:x?}", "", &label, &label)?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum LabelSetErr {
     #[error(

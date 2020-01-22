@@ -9,7 +9,7 @@ mod pass2;
 use crate::config::Config;
 use crate::Opts;
 use err_derive::Error;
-use log::{debug, info, log_enabled, Level::Debug};
+use log::{debug, info};
 use pass1::{pass1, Pass1Error};
 use pass2::{pass2, Pass2Error};
 use std::fs;
@@ -40,21 +40,7 @@ pub fn disasm_all(config: Config, opts: Opts) -> Result<(), DisasmError> {
 
     let pass1 = pass1(config, &rom)?;
 
-    if log_enabled!(Debug) {
-        let labels = &pass1.labels;
-
-        debug!("Global Labels ({}):", labels.globals.len());
-        for (_addr, label) in &labels.globals {
-            debug!("{:4}{} << {:x?}", "", &label, &label);
-        }
-        debug!("Overlayed Labels:");
-        for (block, set) in &labels.overlays {
-            debug!("{:4}{} ({} labels):", "", &block, set.len());
-            for (_addr, label) in set {
-                debug!("{:8}{} << {:x?}", "", &label, &label);
-            }
-        }
-    }
+    debug!("{}", &pass1.labels);
 
     let outdir = outdir
         .or_else(|| default_output_dir(&config_path))
