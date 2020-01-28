@@ -21,6 +21,17 @@ enum JrraStatus {
     NopHold,
 }
 
+impl JrraStatus {
+    fn tick(self) -> Self {
+        match self {
+            Self::Clear => Self::Clear,
+            Self::Jrra => Self::Delay,
+            Self::Delay => Self::Clear,
+            Self::NopHold => Self::NopHold,
+        }
+    }
+}
+
 impl Default for FindFileState {
     fn default() -> Self {
         Self {
@@ -31,12 +42,16 @@ impl Default for FindFileState {
 }
 
 impl FindFileState {
-    // .text sections are padded to the nearest 16 byte boundry with nops/zeros
     pub fn find_file_gaps(&mut self, insn: &mut Instruction) {
         use JrraStatus::*;
-
-        let is_nop = insn.id.0 == INS_NOP;
+        
+        self.jrra = self.jrra.tick();
+        
+        // Since it doesn't matter what's in the delay slot, just count
+        // any jrra delay slots as nops
+        let is_nop = insn.id.0 == INS_NOP || self.jrra == Delay;
         let is_jrra = insn.jump.is_jrra();
+        // .text sections are padded to the nearest 16 byte boundry with nops/zeros
         let aligned_insn = insn.vaddr % 0x10 == 0;
 
         insn.file_break = match (self.nops >= 2, aligned_insn, self.jrra) {
@@ -54,11 +69,9 @@ impl FindFileState {
             (false, false, NopHold) => Clear,
             // not nop + jr ra + remembered jr ra -> new jr ra
             (false, true, NopHold) => Jrra,
-            // jr ra delay slot state machine
+            // no deviations from standard jrra state machine
             (_, true, _) => Jrra,
-            (_, _, Jrra) => Delay,
-            (_, _, Delay) => Clear,
-            (_, _, Clear) => Clear,
+            _ => self.jrra,
         };
 
         self.nops = if is_nop {
