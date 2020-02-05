@@ -23,6 +23,7 @@ use crate::disasm::{
     memmap::{AddrLocation, BlockName, CodeBlock, MemoryMap},
     pass1::findlabels::ConfigLabelLoc,
 };
+use log::{debug, info};
 use std::collections::HashMap;
 
 #[derive(Debug)]
@@ -242,8 +243,8 @@ fn pass1_external_labels<'c>(
         let (mut proc_block, external_labels) = block.into_proc_block();
         let block_name = &proc_block.info.name;
 
-        println!("First pass on external labels for {}", &block_name);
-        println!(
+        info!("First pass on external labels for {}", &block_name);
+        info!(
             "{:4}Started with {} external labels",
             "",
             &external_labels.len()
@@ -251,7 +252,7 @@ fn pass1_external_labels<'c>(
         for (addr, mut label) in external_labels {
             match memory_map.get_addr_location(addr, block_name) {
                 NotFound => {
-                    println!("{:8}Couldn't find label in memory: {:x?}", "", &label);
+                    info!("{:8}Couldn't find label in memory: {:x?}", "", &label);
                     proc_block
                         .label_loc_cache
                         .insert(addr, LabelPlace::NotFound);
@@ -272,7 +273,7 @@ fn pass1_external_labels<'c>(
                 }
                 Single(block) => {
                     if let Some(ovl_labels) = label_set.overlays.get_mut(&block) {
-                        println!(
+                        debug!(
                             "{:8}Found single label from '{}' into '{}': {:x?}",
                             "", &block_name, &block, &label
                         );
@@ -280,19 +281,19 @@ fn pass1_external_labels<'c>(
                             .label_loc_cache
                             .insert(addr, LabelPlace::External(block.clone()));
                         ovl_labels.entry(addr).or_insert_with(|| {
-                            println!("{:10}Label not found; inserted!", "");
+                            debug!("{:10}Label not found; inserted!", "");
                             label.set_overlay(&block);
                             label
                         });
                     } else {
                         // must be a label from a global symbol
-                        println!(
+                        debug!(
                             "{:8}Found global label from '{}' into '{}': {:x?}",
                             "", &block_name, &block, &label
                         );
                         proc_block.label_loc_cache.insert(addr, LabelPlace::Global);
                         label_set.globals.entry(addr).or_insert_with(|| {
-                            println!("{:10}Global label not found; inserted!", "");
+                            debug!("{:10}Global label not found; inserted!", "");
                             label.set_global();
                             label
                         });
@@ -312,7 +313,7 @@ fn pass1_external_labels<'c>(
             .as_ref()
             .map(Vec::len)
             .unwrap_or(0);
-        println!(
+        info!(
             "{:4}Ended with {} unresovled labels and {} not found labels",
             "", unres, notfound
         );
@@ -349,11 +350,11 @@ fn pass2_multi_labels(block: &mut ProcessedBlock, label_set: &mut LabelSet) {
     let cache = &mut block.label_loc_cache;
     let fold_new_multilabels =
         |mut acc: Vec<Label>, (mut label, found_in): (Label, Vec<BlockName>)| {
-            println!(
+            debug!(
                 "{:4}Found label {:08x} <{:?}> in {:x?}",
                 "", label.addr, label.kind, &found_in
             );
-            println!("{:8}Used to be in {:x?}", "", &label.location);
+            debug!("{:8}Used to be in {:x?}", "", &label.location);
 
             let addr = label.addr;
             match found_in.len() {
@@ -385,7 +386,7 @@ fn pass2_multi_labels(block: &mut ProcessedBlock, label_set: &mut LabelSet) {
     if let Some(multiple) = block.unresolved.multiple.take() {
         let max = multiple.len();
 
-        println!(
+        info!(
             "Second pass on multi-block labels from {}",
             &block.info.name
         );

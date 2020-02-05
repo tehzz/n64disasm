@@ -44,9 +44,9 @@ impl Default for FindFileState {
 impl FindFileState {
     pub fn find_file_gaps(&mut self, insn: &mut Instruction) {
         use JrraStatus::*;
-        
+
         self.jrra = self.jrra.tick();
-        
+
         // Since it doesn't matter what's in the delay slot, just count
         // any jrra delay slots as nops
         let is_nop = insn.id.0 == INS_NOP || self.jrra == Delay;

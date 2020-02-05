@@ -345,7 +345,10 @@ pub enum BlockKind {
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum Section {
     Bss,
+    /// Could be in either section, aka not noload
     TextData,
+    Text,
+    Data,
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -370,6 +373,10 @@ impl BlockRange {
 
     pub fn get_text_vaddr(&self) -> u32 {
         self.ram_start
+    }
+
+    pub fn get_ram_end(&self) -> u32 {
+        self.ram_end
     }
 
     pub fn contains(&self, addr: u32) -> bool {
