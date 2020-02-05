@@ -1,5 +1,5 @@
 use crate::disasm::{mipsvals::*, pass1::Instruction};
-use capstone::{arch::mips::MipsOperand, arch::mips::MipsReg::*, prelude::*};
+use capstone::{arch::mips::MipsReg::*, prelude::*};
 use err_derive::Error;
 use std::collections::HashMap;
 use std::fmt;
@@ -290,7 +290,8 @@ fn generate_insn_links<'s, 'i>(
         // and then setting the lower bits with an `ori`, if needed. This instruction
         // then moves the float to cop1
         INS_MTC1 => {
-            let src = get_reg_n(&insn.operands, 0)
+            let src = insn
+                .get_reg_n(0)
                 .ok_or_else(|| MissingInsnComponent(insn.clone(), "mtc1 source reg"))?;
 
             if src.0 as u32 == MIPS_REG_ZERO {
@@ -366,34 +367,19 @@ fn reset_temp_reg(state: &mut HashMap<RegId, LuiState>) {
     }
 }
 
-fn get_imm(operands: &[MipsOperand]) -> Option<i16> {
-    use MipsOperand::*;
-
-    operands.iter().find_map(|op| {
-        if let Imm(i) = op {
-            Some(*i as i16)
-        } else {
-            None
-        }
-    })
-}
-
-fn get_reg_n(operands: &[MipsOperand], n: usize) -> Option<RegId> {
-    use MipsOperand::*;
-
-    operands
-        .iter()
-        .filter_map(|op| if let Reg(id) = op { Some(*id) } else { None })
-        .nth(n)
-}
-
 /// Get the set of (rd, rs, imm) from an `Instruction`
 fn get_dsimm_triple(insn: &Instruction) -> Result<(RegId, RegId, i16), LinkInsnErr> {
     use LinkInsnErr::MissingInsnComponent as IErr;
 
-    let dst = get_reg_n(&insn.operands, 0).ok_or_else(|| IErr(insn.clone(), "dst reg"))?;
-    let src = get_reg_n(&insn.operands, 1).ok_or_else(|| IErr(insn.clone(), "src reg"))?;
-    let imm = get_imm(&insn.operands).ok_or_else(|| IErr(insn.clone(), "immediate"))?;
+    let dst = insn
+        .get_reg_n(0)
+        .ok_or_else(|| IErr(insn.clone(), "dst reg"))?;
+    let src = insn
+        .get_reg_n(1)
+        .ok_or_else(|| IErr(insn.clone(), "src reg"))?;
+    let imm = insn
+        .get_imm()
+        .ok_or_else(|| IErr(insn.clone(), "immediate"))?;
 
     Ok((dst, src, imm))
 }
@@ -402,8 +388,12 @@ fn get_dsimm_triple(insn: &Instruction) -> Result<(RegId, RegId, i16), LinkInsnE
 fn get_lui_ops(insn: &Instruction) -> Result<(RegId, i16), LinkInsnErr> {
     use LinkInsnErr::MissingInsnComponent as IErr;
 
-    let reg = get_reg_n(&insn.operands, 0).ok_or_else(|| IErr(insn.clone(), "lui reg"))?;
-    let imm = get_imm(&insn.operands).ok_or_else(|| IErr(insn.clone(), "lui immediate"))?;
+    let reg = insn
+        .get_reg_n(0)
+        .ok_or_else(|| IErr(insn.clone(), "lui reg"))?;
+    let imm = insn
+        .get_imm()
+        .ok_or_else(|| IErr(insn.clone(), "lui immediate"))?;
 
     Ok((reg, imm))
 }
@@ -411,21 +401,13 @@ fn get_lui_ops(insn: &Instruction) -> Result<(RegId, i16), LinkInsnErr> {
 /// Get the base register and offset for a load or store instruction
 fn get_mem_offset(insn: &Instruction) -> Result<(RegId, RegId, i16), LinkInsnErr> {
     use LinkInsnErr::MissingInsnComponent as IErr;
-    use MipsOperand::Mem;
 
-    let dst =
-        get_reg_n(&insn.operands, 0).ok_or_else(|| IErr(insn.clone(), "dst for load or store"))?;
+    let dst = insn
+        .get_reg_n(0)
+        .ok_or_else(|| IErr(insn.clone(), "dst for load or store"))?;
 
     let (base, disp) = insn
-        .operands
-        .iter()
-        .find_map(|op| {
-            if let Mem(mem) = op {
-                Some((mem.base(), mem.disp() as i16))
-            } else {
-                None
-            }
-        })
+        .get_mem_op()
         .ok_or_else(|| IErr(insn.clone(), "mem info for load or store"))?;
 
     Ok((dst, base, disp))

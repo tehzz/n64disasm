@@ -137,7 +137,7 @@ impl<'a> FindSectionState<'a> {
 
     fn end_text_block(&self, end: u32) -> (u32, u32) {
         println!("Tried to end .text section in block {}", &self.block.name);
-        println!("{:2}{:x?}", "", self);
+        println!("{:2}{:#x?}", "", self);
         // todo: poison checks to find possible ends
         (self.text_start.unwrap().get(), end)
     }

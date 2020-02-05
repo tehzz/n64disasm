@@ -1,6 +1,10 @@
 use crate::disasm::pass1::{FileBreak, JumpKind, LinkedVal};
 use arrayvec::ArrayString;
-use capstone::{arch::mips::MipsOperand, prelude::*, Insn};
+use capstone::{
+    arch::mips::MipsOperand::{self, *},
+    prelude::*,
+    Insn,
+};
 use err_derive::Error;
 use std::convert::TryInto;
 
@@ -72,5 +76,36 @@ impl Instruction {
             .as_ref()
             .and_then(|s| s.find(',').map(|i| (&s[..i], s)))
             .and_then(|(dst, s)| s.find('(').map(|i| (dst, &s[i..])))
+    }
+
+    /// Return the possible immediate value associated with this `Instruction`
+    pub fn get_imm(&self) -> Option<i16> {
+        self.operands.iter().find_map(|op| {
+            if let Imm(i) = op {
+                Some(*i as i16)
+            } else {
+                None
+            }
+        })
+    }
+
+    /// Get the `nth` register for this instruction, if possible
+    pub fn get_reg_n(&self, n: usize) -> Option<RegId> {
+        self.operands
+            .iter()
+            .filter_map(|op| if let Reg(id) = op { Some(*id) } else { None })
+            .nth(n)
+    }
+
+    /// Get the base register and immediate displacement for this instruction,
+    /// if possible (load or store)
+    pub fn get_mem_op(&self) -> Option<(RegId, i16)> {
+        self.operands.iter().find_map(|op| {
+            if let Mem(mem) = op {
+                Some((mem.base(), mem.disp() as i16))
+            } else {
+                None
+            }
+        })
     }
 }
