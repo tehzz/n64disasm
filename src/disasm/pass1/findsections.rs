@@ -2,15 +2,25 @@ use crate::disasm::{
     instruction::Instruction,
     memmap::{CodeBlock, Section},
     pass1::FileBreak,
+    mipsvals::MIPS3_INSN,
 };
+use once_cell::sync::Lazy;
+use std::collections::HashSet;
 use std::num::NonZeroU32;
 use std::ops::Range;
+
+static VALID_MIPS3_INSN: Lazy<HashSet<u32>> = Lazy::new(|| {
+    MIPS3_INSN
+        .iter()
+        .map(|insn| *insn as u32)
+        .collect()
+});
 
 #[derive(Debug)]
 pub struct FindSectionState<'a> {
     vaddr: Option<NonZeroU32>,
     text_start: Option<NonZeroU32>,
-    last_jrra: Option<Malformed>,
+    last_file_jrra: Option<Malformed>,
     last_file_break: Option<Malformed>,
     sections: Vec<(Range<u32>, Section)>,
     block: &'a CodeBlock,
@@ -23,7 +33,7 @@ struct Malformed {
     poisoned: bool,
     cop2: u16,
     cop0: u16,
-    sp: u16,
+    odd_regs: u16,
 }
 
 impl Malformed {
@@ -33,7 +43,7 @@ impl Malformed {
             poisoned: false,
             cop2: 0,
             cop0: 0,
-            sp: 0,
+            odd_regs: 0,
         }
     }
 
@@ -43,8 +53,8 @@ impl Malformed {
             None => (),
             Some(Cop2) => self.cop2 += 1,
             Some(Cop0) => self.cop0 += 1,
-            Some(SpUsage) => self.sp += 1,
             Some(IllegalInsn) => self.poisoned = true,
+            Some(OddRegUsage) => self.odd_regs += 1,
         };
 
         self
@@ -56,7 +66,7 @@ impl<'a> FindSectionState<'a> {
         Self {
             vaddr: None,
             text_start: None,
-            last_jrra: None,
+            last_file_jrra: None,
             last_file_break: None,
             sections: Vec::with_capacity(4),
             block,
@@ -111,8 +121,9 @@ impl<'a> FindSectionState<'a> {
             Some(..) => (),
         }
 
-        if insn.jump.is_jrra() {
-            self.last_jrra = Some(Malformed::new_at(vaddr));
+        // if there's a possible jrra that ends a file (pc after delay is 16byte-aligned)
+        if insn.jump.is_jrra() && vaddr + 8 % 0x10 == 0 {
+            self.last_file_jrra = Some(Malformed::new_at(vaddr));
         }
 
         if insn.file_break == FileBreak::Likely {
@@ -129,7 +140,7 @@ impl<'a> FindSectionState<'a> {
             }
         }
 
-        self.last_jrra.as_mut().map(update_issue);
+        self.last_file_jrra.as_mut().map(update_issue);
         self.last_file_break.as_mut().map(update_issue);
         // TODO: make an error type here and use try_from
         self.vaddr = NonZeroU32::new(vaddr);
@@ -147,7 +158,7 @@ impl<'a> FindSectionState<'a> {
     fn reset(&mut self, new_start: u32) {
         // TODO: make an error type here and use try_from
         self.text_start = NonZeroU32::new(new_start);
-        self.last_jrra = None;
+        self.last_file_jrra = None;
         self.last_file_break = Some(Malformed::new_at(new_start));
     }
 }
@@ -157,7 +168,7 @@ enum MalKinds {
     Cop2,
     Cop0,
     IllegalInsn,
-    SpUsage,
+    OddRegUsage,
 }
 
 fn check_bad_insn(insn: &Instruction) -> Option<MalKinds> {
@@ -171,7 +182,7 @@ fn check_bad_insn(insn: &Instruction) -> Option<MalKinds> {
     const SPECIAL3_OPS: u32 = 0b011_111;
 
     let check_valid_insn = || {
-        if VALID_MIPS3_INS.contains_key(&(insn.id.0 as u32)) {
+        if VALID_MIPS3_INSN.contains(&(insn.id.0 as u32)) {
             None
         } else {
             Some(IllegalInsn)
@@ -188,161 +199,6 @@ fn check_bad_insn(insn: &Instruction) -> Option<MalKinds> {
     }
     .or_else(check_valid_insn)
 }
-
-use capstone::arch::mips::MipsInsn::{self, *};
-use std::collections::HashMap;
-
-const MIPS3_INSN: &[MipsInsn] = &[
-    MIPS_INS_ADD,
-    MIPS_INS_ADDU,
-    MIPS_INS_ADDI,
-    MIPS_INS_ADDIU,
-    MIPS_INS_AND,
-    MIPS_INS_ANDI,
-    MIPS_INS_BAL,
-    MIPS_INS_BC1F,
-    MIPS_INS_BC1FL,
-    MIPS_INS_BC1T,
-    MIPS_INS_BC1TL,
-    MIPS_INS_BEQ,
-    MIPS_INS_BEQL,
-    MIPS_INS_BGEZ,
-    MIPS_INS_BGEZAL,
-    MIPS_INS_BGEZALL,
-    MIPS_INS_BGEZL,
-    MIPS_INS_BGTZ,
-    MIPS_INS_BGTZL,
-    MIPS_INS_BLEZ,
-    MIPS_INS_BLEZL,
-    MIPS_INS_BLTZ,
-    MIPS_INS_BLTZAL,
-    MIPS_INS_BLTZALL,
-    MIPS_INS_BLTZL,
-    MIPS_INS_BNE,
-    MIPS_INS_BNEL,
-    MIPS_INS_BREAK,
-    MIPS_INS_BEQZ,
-    MIPS_INS_B,
-    MIPS_INS_BNEZ,
-    MIPS_INS_CACHE,
-    MIPS_INS_CFC1,
-    MIPS_INS_CTC1,
-    MIPS_INS_CEIL,
-    MIPS_INS_CVT,
-    MIPS_INS_C,
-    MIPS_INS_DADD,
-    MIPS_INS_DADDI,
-    MIPS_INS_DADDIU,
-    MIPS_INS_DADDU,
-    MIPS_INS_DDIV,
-    MIPS_INS_DDIVU,
-    MIPS_INS_DIV,
-    MIPS_INS_DIVU,
-    MIPS_INS_DMFC1,
-    MIPS_INS_DMTC1,
-    MIPS_INS_DMUL,
-    MIPS_INS_DMULT,
-    MIPS_INS_DMULTU,
-    MIPS_INS_DSLL,
-    MIPS_INS_DSLL32,
-    MIPS_INS_DSLLV,
-    MIPS_INS_DSRA,
-    MIPS_INS_DSRA32,
-    MIPS_INS_DSRAV,
-    MIPS_INS_DSRL,
-    MIPS_INS_DSRL32,
-    MIPS_INS_DSRLV,
-    MIPS_INS_DSUB,
-    MIPS_INS_DSUBU,
-    MIPS_INS_ERET,
-    MIPS_INS_ABS,
-    MIPS_INS_MOV,
-    MIPS_INS_MUL,
-    MIPS_INS_NEG,
-    MIPS_INS_SQRT,
-    MIPS_INS_SUB,
-    MIPS_INS_J,
-    MIPS_INS_JAL,
-    MIPS_INS_JALR,
-    MIPS_INS_JR,
-    MIPS_INS_LB,
-    MIPS_INS_LBU,
-    MIPS_INS_LD,
-    MIPS_INS_LDC1,
-    MIPS_INS_LDL,
-    MIPS_INS_LDR,
-    MIPS_INS_LH,
-    MIPS_INS_LHU,
-    MIPS_INS_LUI,
-    MIPS_INS_LW,
-    MIPS_INS_LWC1,
-    MIPS_INS_LWL,
-    MIPS_INS_LWR,
-    MIPS_INS_LWU,
-    MIPS_INS_LI,
-    MIPS_INS_MFC0,
-    MIPS_INS_MFC1,
-    MIPS_INS_MFHI,
-    MIPS_INS_MFLO,
-    MIPS_INS_MTC0,
-    MIPS_INS_MTC1,
-    MIPS_INS_MTHI,
-    MIPS_INS_MTLO,
-    MIPS_INS_MULT,
-    MIPS_INS_MULTU,
-    MIPS_INS_NOR,
-    MIPS_INS_NORI,
-    MIPS_INS_OR,
-    MIPS_INS_ORI,
-    MIPS_INS_SB,
-    MIPS_INS_SD,
-    MIPS_INS_SDC1,
-    MIPS_INS_SDL,
-    MIPS_INS_SDR,
-    MIPS_INS_SH,
-    MIPS_INS_SLL,
-    MIPS_INS_SLLV,
-    MIPS_INS_SLT,
-    MIPS_INS_SLTI,
-    MIPS_INS_SLTIU,
-    MIPS_INS_SLTU,
-    MIPS_INS_SRA,
-    MIPS_INS_SRAV,
-    MIPS_INS_SRL,
-    MIPS_INS_SRLV,
-    MIPS_INS_SUBU,
-    MIPS_INS_SW,
-    MIPS_INS_SWC1,
-    MIPS_INS_SWL,
-    MIPS_INS_SWR,
-    MIPS_INS_TEQ,
-    MIPS_INS_TEQI,
-    MIPS_INS_TGE,
-    MIPS_INS_TGEI,
-    MIPS_INS_TGEIU,
-    MIPS_INS_TGEU,
-    MIPS_INS_TLT,
-    MIPS_INS_TLTI,
-    MIPS_INS_TLTIU,
-    MIPS_INS_TLTU,
-    MIPS_INS_TNE,
-    MIPS_INS_TNEI,
-    MIPS_INS_TRUNC,
-    MIPS_INS_XOR,
-    MIPS_INS_XORI,
-    MIPS_INS_NOP,
-    MIPS_INS_NEGU,
-    MIPS_INS_NOT,
-];
-
-use once_cell::sync::Lazy;
-
-static VALID_MIPS3_INS: Lazy<HashMap<u32, MipsInsn>> = Lazy::new(|| {
-    MIPS3_INSN
-        .iter()
-        .map(|insn| (*insn as u32, *insn))
-        .collect()
-});
 
 #[cfg(test)]
 mod test {
