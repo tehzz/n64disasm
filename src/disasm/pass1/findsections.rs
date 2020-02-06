@@ -31,9 +31,11 @@ struct Malformed {
     start_vaddr: u32,
     /// true if any instructions after `start_vaddr` are MIPSIV or later
     poisoned: bool,
-    cop2: u16,
-    cop0: u16,
-    odd_regs: u16,
+    cop2: u8,
+    cop0: u8,
+    jrras: u8,
+    sp: u8,
+    odd_regs: u8,
 }
 
 impl Malformed {
@@ -43,23 +45,32 @@ impl Malformed {
             poisoned: false,
             cop2: 0,
             cop0: 0,
+            jrras: 0,
+            sp: 0,
             odd_regs: 0,
         }
     }
 
     fn update(&mut self, kind: Option<MalKinds>) -> &mut Self {
         use MalKinds::*;
+
         match kind {
             None => (),
-            Some(Cop2) => self.cop2 += 1,
-            Some(Cop0) => self.cop0 += 1,
+            Some(Cop2) => self.cop2 = self.cop2.saturating_add(1),
+            Some(Cop0) => self.cop0 = self.cop0.saturating_add(1),
             Some(IllegalInsn) => self.poisoned = true,
-            Some(OddRegUsage) => self.odd_regs += 1,
+            Some(SpUsage) => self.sp = self.sp.saturating_add(1),
+            Some(OddRegUsage(n)) => self.odd_regs = self.odd_regs.saturating_add(n),
         };
 
         self
     }
+
+    fn add_jrra(&mut self) {
+        self.jrras = self.jrras.saturating_add(1);
+    }
 }
+
 
 impl<'a> FindSectionState<'a> {
     pub fn new(block: &'a CodeBlock) -> Self {
@@ -122,8 +133,14 @@ impl<'a> FindSectionState<'a> {
         }
 
         // if there's a possible jrra that ends a file (pc after delay is 16byte-aligned)
-        if insn.jump.is_jrra() && vaddr + 8 % 0x10 == 0 {
-            self.last_file_jrra = Some(Malformed::new_at(vaddr));
+        // reset the counting state for hidden file breaks. Else, count the jrra
+        if insn.jump.is_jrra() {
+            if (vaddr + 8) % 0x10 == 0 {
+                self.last_file_jrra = Some(Malformed::new_at(vaddr));
+            } else {
+                self.last_file_jrra.as_mut().map(Malformed::add_jrra);
+                self.last_file_break.as_mut().map(Malformed::add_jrra);
+            }
         }
 
         if insn.file_break == FileBreak::Likely {
@@ -168,26 +185,24 @@ enum MalKinds {
     Cop2,
     Cop0,
     IllegalInsn,
-    OddRegUsage,
+    SpUsage,
+    OddRegUsage(u8),
 }
 
 fn check_bad_insn(insn: &Instruction) -> Option<MalKinds> {
     use MalKinds::*;
+    use capstone::{RegId, arch::mips::MipsReg::*};
 
-    const OPCODE_MASK: u32 = 0b1111_1100_0000_0000_0000_0000_0000_0000;
-    const COP0_OPS: u32 = 0b010_000;
-    const COP2_OPS: u32 = 0b010_010;
-    const COP1X_OPS: u32 = 0b010_011;
+    const REG_SP: RegId = RegId(MIPS_REG_SP as u16);
+    const OPCODE_MASK: u32  = 0b1111_1100_0000_0000_0000_0000_0000_0000;
+    const COP0_OPS: u32     = 0b010_000;
+    const COP2_OPS: u32     = 0b010_010;
+    const COP1X_OPS: u32    = 0b010_011;
     const SPECIAL2_OPS: u32 = 0b011_100;
     const SPECIAL3_OPS: u32 = 0b011_111;
 
-    let check_valid_insn = || {
-        if VALID_MIPS3_INSN.contains(&(insn.id.0 as u32)) {
-            None
-        } else {
-            Some(IllegalInsn)
-        }
-    };
+    let check_valid_insn = || bool_then(IllegalInsn, !VALID_MIPS3_INSN.contains(&(insn.id.0 as u32)));
+    let check_sp_usage = || bool_then(SpUsage, insn.contains_reg(REG_SP));
 
     let op = (insn.raw & OPCODE_MASK) >> 26;
 
@@ -198,6 +213,11 @@ fn check_bad_insn(insn: &Instruction) -> Option<MalKinds> {
         _ => None,
     }
     .or_else(check_valid_insn)
+    .or_else(check_sp_usage)
+}
+
+fn bool_then<T>(t: T, b: bool) -> Option<T> {
+    if b { Some(t) } else { None }
 }
 
 #[cfg(test)]
