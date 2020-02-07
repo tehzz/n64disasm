@@ -9,6 +9,7 @@ use std::collections::HashSet;
 use std::num::NonZeroU32;
 use std::ops::Range;
 
+// move to csutils
 static VALID_MIPS3_INSN: Lazy<HashSet<u32>> = Lazy::new(|| {
     MIPS3_INSN
         .iter()
@@ -20,55 +21,47 @@ static VALID_MIPS3_INSN: Lazy<HashSet<u32>> = Lazy::new(|| {
 pub struct FindSectionState<'a> {
     vaddr: Option<NonZeroU32>,
     text_start: Option<NonZeroU32>,
-    last_file_jrra: Option<Malformed>,
-    last_file_break: Option<Malformed>,
-    sections: Vec<(Range<u32>, Section)>,
+    last_break: FileBreaks,
+    transitions: Vec<Transition>,
+    //sections: Vec<(Range<u32>, Section)>,
     block: &'a CodeBlock,
 }
 
-#[derive(Debug)]
-struct Malformed {
-    start_vaddr: u32,
-    /// true if any instructions after `start_vaddr` are MIPSIV or later
-    poisoned: bool,
-    cop2: u8,
-    cop0: u8,
-    jrras: u8,
-    sp: u8,
-    odd_regs: u8,
+#[derive(Debug, Copy, Clone, Default)]
+struct FileBreaks {
+    possible_jrra_break: Option<NonZeroU32>,
+    known_file_break: Option<NonZeroU32>,
 }
 
-impl Malformed {
-    fn new_at(start_vaddr: u32) -> Self {
+impl FileBreaks {
+    // all transitions between .text and .data sections are file breaks
+    // due to the behavior of the typical n64 linker (if not all linkers)
+    fn reset(new_start: Option<NonZeroU32>) -> Self {
         Self {
-            start_vaddr,
-            poisoned: false,
-            cop2: 0,
-            cop0: 0,
-            jrras: 0,
-            sp: 0,
-            odd_regs: 0,
+            possible_jrra_break: None,
+            known_file_break: new_start,
         }
     }
-
-    fn update(&mut self, kind: Option<MalKinds>) -> &mut Self {
-        use MalKinds::*;
-
-        match kind {
-            None => (),
-            Some(Cop2) => self.cop2 = self.cop2.saturating_add(1),
-            Some(Cop0) => self.cop0 = self.cop0.saturating_add(1),
-            Some(IllegalInsn) => self.poisoned = true,
-            Some(SpUsage) => self.sp = self.sp.saturating_add(1),
-            Some(OddRegUsage(n)) => self.odd_regs = self.odd_regs.saturating_add(n),
-        };
-
-        self
+    // store the location after the jrra and the delay slot
+    fn new_jrra(&mut self, addr: NonZeroU32) {
+        let pc_after_jump = NonZeroU32::new(addr.get() + 8);
+        self.possible_jrra_break = pc_after_jump;
     }
 
-    fn add_jrra(&mut self) {
-        self.jrras = self.jrras.saturating_add(1);
+    fn new_file(&mut self, addr: NonZeroU32) {
+        self.known_file_break = Some(addr);
     }
+}
+
+#[derive(Debug)]
+enum Transition {
+    DataToText(Range<u32>),
+    TextToData(TextEndInfo),
+}
+
+#[derive(Debug)]
+struct TextEndInfo {
+    text: Range<u32>, data_end: u32, breaks: FileBreaks
 }
 
 
@@ -77,114 +70,252 @@ impl<'a> FindSectionState<'a> {
         Self {
             vaddr: None,
             text_start: None,
-            last_file_jrra: None,
-            last_file_break: None,
-            sections: Vec::with_capacity(4),
+            last_break: FileBreaks::default(),
+            transitions: Vec::with_capacity(4),
             block,
         }
     }
 
-    pub fn finish(mut self) -> Vec<(Range<u32>, Section)> {
-        let final_pc = self.vaddr.unwrap().get() + 4;
-        let (start, end) = self.end_text_block(final_pc);
-        let block_end = self.block.range.get_ram_end();
-
-        assert!(
-            end <= block_end,
-            "Block text ended outside of block RAM space"
-        );
-
-        self.sections.push((start..end, Section::Text));
-
-        if end < block_end {
-            self.sections.push((end..block_end, Section::Data));
-        }
-
-        self.sections
-    }
-
     pub fn check_insn(&mut self, insn: &Instruction) {
+        use Transition::*;
+
         let vaddr = insn.vaddr;
+        let nz_vaddr = NonZeroU32::new(vaddr)
+            .expect("non-null instruction address");
 
         match self.vaddr {
             None => {
-                let start = self.block.range.get_text_vaddr();
+                let block_start = self.block.range.get_text_vaddr();
 
                 assert!(
-                    start <= vaddr,
+                    block_start <= vaddr,
                     "Start of a code block after the address of the first instruction"
                 );
-                if start < vaddr {
-                    self.sections.push((start..vaddr, Section::Data));
+                if block_start < vaddr {
+                    self.transitions.push(DataToText(block_start..vaddr));
                 }
 
                 self.reset(vaddr);
             }
             Some(prior) if prior.get() + 4 != vaddr => {
                 // there was a hole in machine code (.text -> .data -> .text)
-                let next = prior.get() + 4;
-                let (text_start, text_end) = self.end_text_block(next);
+                let text_start = self.text_start
+                    .expect(".text block must start before a hole in instruction addresses")
+                    .get();
+                let prior_end = prior.get() + 4;
+                let t2d_transition = self.end_text_block(text_start..prior_end, vaddr);
 
-                self.sections.push((text_start..text_end, Section::Text));
-                self.sections.push((text_end..vaddr, Section::Data));
+                self.transitions.push(t2d_transition);
                 self.reset(vaddr);
             }
             Some(..) => (),
         }
 
         // if there's a possible jrra that ends a file (pc after delay is 16byte-aligned)
-        // reset the counting state for hidden file breaks. Else, count the jrra
-        if insn.jump.is_jrra() {
-            if (vaddr + 8) % 0x10 == 0 {
-                self.last_file_jrra = Some(Malformed::new_at(vaddr));
-            } else {
-                self.last_file_jrra.as_mut().map(Malformed::add_jrra);
-                self.last_file_break.as_mut().map(Malformed::add_jrra);
+        // reset the counting state for hidden file breaks.
+        if insn.jump.is_jrra() && (vaddr + 8) % 0x10 == 0  {
+            self.last_break.new_jrra(nz_vaddr);
+        } else if insn.file_break == FileBreak::Likely {
+            self.last_break.new_file(nz_vaddr);
+        }
+
+        self.vaddr = Some(nz_vaddr);
+    }
+
+    /// Reify the set of `Transition`s into correctly sized `.text` and `.data` sections.
+    /// The two big issues with using capstone's disassembled instructions is that 
+    /// (1) capstone doesn't have a mips3 mode, so it will read data as illegal, later 
+    ///     mips instructions, and
+    /// (2) N64 RSP ucode is mostly valid (but nonsensical) mips3 code.
+    /// This uses some basic heuristics to try to map file breaks between disassembled 
+    /// "`.text` sections" "`.data` sections" to figure out the real file break between
+    /// code and data
+    pub fn finish(self, insns: &[Instruction]) -> Vec<(Range<u32>, Section)> {
+        let final_pc = self.vaddr.expect("Non-null insn address").get() + 4;
+        let block_start = self.block.range.get_text_vaddr(); // TODO: get_ram_start()
+        let block_end = self.block.range.get_ram_end();
+        let final_transition = self.final_transition(final_pc, block_end);
+
+        // assert!(
+        //     end <= block_end,
+        //     "Block text ended outside of block RAM space"
+        // );
+
+        let calc_text_end = |info| find_real_text_end(insns, block_start, info);
+
+        use Transition::*;
+        let mut sections = Vec::with_capacity(self.transitions.len() + 1);
+        for transition in self.transitions.into_iter().chain(final_transition) {
+            match transition {
+                DataToText(range) => sections.push((range, Section::Data)),
+                TextToData(info) => {
+                    let ranges = calc_text_end(info);
+                    let iter = ranges.into_iter().cloned();
+
+                    sections.extend(iter);
+                }
             }
         }
 
-        if insn.file_break == FileBreak::Likely {
-            self.last_file_break = Some(Malformed::new_at(vaddr));
-        }
-
-        let possible_issues = check_bad_insn(&insn);
-        let update_issue = |m| Malformed::update(m, possible_issues);
-
-        if let Some(bad) = possible_issues {
-            if bad == MalKinds::IllegalInsn {
-                println!("{:2} Found {:?} instruction", "", &bad);
-                println!("{:2} {:x?}", "", &insn);
-            }
-        }
-
-        self.last_file_jrra.as_mut().map(update_issue);
-        self.last_file_break.as_mut().map(update_issue);
-        // TODO: make an error type here and use try_from
-        self.vaddr = NonZeroU32::new(vaddr);
+        sections
     }
 
-    fn end_text_block(&self, end: u32) -> (u32, u32) {
-        println!("Tried to end .text section in block {}", &self.block.name);
-        println!("{:2}{:#x?}", "", self);
-        // todo: poison checks to find possible ends
-        (self.text_start.unwrap().get(), end)
+    fn end_text_block(&self, text: Range<u32>, data_end: u32) -> Transition {
+        println!("Found the end of a .text section in block {}", &self.block.name);
+        println!("{:2}{:x?}", "", self);
+
+        Transition::TextToData(TextEndInfo{
+            text,
+            data_end,
+            breaks: self.last_break,
+        })
     }
 
-    /// Reset the start of this .text section, and reset the
-    /// various bad disassembly structs
+    /// Reset state to record the start of a new .text section, 
+    /// and reset the file break locations
     fn reset(&mut self, new_start: u32) {
-        // TODO: make an error type here and use try_from
-        self.text_start = NonZeroU32::new(new_start);
-        self.last_file_jrra = None;
-        self.last_file_break = Some(Malformed::new_at(new_start));
+        let start = NonZeroU32::new(new_start);
+
+        self.text_start = start;
+        self.last_break = FileBreaks::reset(start);
+    }
+
+    fn final_transition(&self, end: u32, data_end: u32) -> Option<Transition> {
+        let start = self.text_start.expect("Non-null start of .text").get();
+
+        if start < end {
+            Some(self.end_text_block(start..end, data_end))
+        } else if end < data_end{
+            Some(Transition::DataToText(end..data_end))
+        } else {
+            None
+        }
     }
 }
+
+fn find_real_text_end(insns: &[Instruction], offset: u32, info: TextEndInfo) -> [(Range<u32>, Section); 2] {
+    let mut end_counts = FindFileEnd::from(&info);
+    println!("{:2}{:#x?}","", &info);
+
+    if let Some(starting_vaddr) = end_counts.earliest_vaddr() {
+        let starting_vaddr = dbg!(starting_vaddr.get());
+        let first_insn_offset = dbg!((starting_vaddr - dbg!(offset)) as usize / 4);
+        let relevant_insns = &insns[first_insn_offset..];
+
+        end_counts.check_instructions(relevant_insns);
+
+        println!("{:4}{:#x?}", "", &end_counts);
+    }
+    
+
+    [
+        (info.text.clone(), Section::Text),
+        (info.text.end..info.data_end, Section::Data),
+    ]
+}
+
+#[derive(Debug)]
+struct FindFileEnd {
+    jrra_file: Option<Malformed>,
+    new_file: Option<Malformed>,
+}
+
+impl From<&TextEndInfo> for FindFileEnd {
+    fn from(info: &TextEndInfo) -> Self {
+        let jrra_file = info.breaks.possible_jrra_break.map(Malformed::new_at);
+        let new_file = info.breaks.known_file_break.map(Malformed::new_at);
+
+        Self {
+            jrra_file, new_file
+        }
+    }
+}
+
+impl FindFileEnd {
+    fn earliest_vaddr(&self) -> Option<NonZeroU32> {
+        let mb_j = self.jrra_file.as_ref().map(|j| j.start_vaddr);
+        let mb_n = self.new_file.as_ref().map(|n| n.start_vaddr);
+        
+        mb_j.and_then(|j| mb_n.map(|n| j.min(n)))
+            .or(mb_j)
+            .or(mb_n)
+    }
+
+    fn check_instructions(&mut self, insns: &[Instruction]) {
+        if self.jrra_file.is_none() && self.new_file.is_none() {
+            return;
+        }
+
+        for insn in insns {
+            let issue = check_bad_insn(insn);
+            let update_issue = |m| Malformed::update(m, insn.vaddr, issue);
+
+            if let Some(bad) = issue {
+                if bad == MalKinds::IllegalInsn {
+                    println!("{:2} Found {:?} instruction", "", &bad);
+                    println!("{:2} {:x?}", "", &insn);
+                }
+            }
+
+            self.jrra_file.as_mut().map(update_issue);
+            self.new_file.as_mut().map(update_issue);
+        }
+    }
+}
+
+#[derive(Debug)]
+struct Malformed {
+    start_vaddr: NonZeroU32,
+    /// true if any instructions after `start_vaddr` are MIPSIV or later
+    poisoned: bool,
+    cop2: u8,
+    cop0: u8,
+    jrra: u8,
+    sp: u8,
+    odd_regs: u8,
+}
+
+impl Malformed {
+    fn new_at(start_vaddr: NonZeroU32) -> Self {
+        Self {
+            start_vaddr,
+            poisoned: false,
+            cop2: 0,
+            cop0: 0,
+            jrra: 0,
+            sp: 0,
+            odd_regs: 0,
+        }
+    }
+
+    fn update(&mut self, at: u32, kind: Option<MalKinds>) -> &mut Self {
+        use MalKinds::*;
+
+        if at < self.start_vaddr.get() {
+            return self;
+        }
+
+        match kind {
+            None => (),
+            Some(Cop2) => self.cop2 = self.cop2.saturating_add(1),
+            Some(Cop0) => self.cop0 = self.cop0.saturating_add(1),
+            Some(IllegalInsn) => self.poisoned = true,
+            Some(Jrra) => self.jrra = self.jrra.saturating_add(1),
+            Some(SpUsage) => self.sp = self.sp.saturating_add(1),
+            Some(OddRegUsage(n)) => self.odd_regs = self.odd_regs.saturating_add(n),
+        };
+
+        self
+    }
+}
+
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 enum MalKinds {
     Cop2,
     Cop0,
     IllegalInsn,
+    Jrra,
     SpUsage,
     OddRegUsage(u8),
 }
@@ -203,6 +334,7 @@ fn check_bad_insn(insn: &Instruction) -> Option<MalKinds> {
 
     let check_valid_insn = || bool_then(IllegalInsn, !VALID_MIPS3_INSN.contains(&(insn.id.0 as u32)));
     let check_sp_usage = || bool_then(SpUsage, insn.contains_reg(REG_SP));
+    let check_jrra = || bool_then(Jrra, insn.jump.is_jrra());
 
     let op = (insn.raw & OPCODE_MASK) >> 26;
 
@@ -214,6 +346,7 @@ fn check_bad_insn(insn: &Instruction) -> Option<MalKinds> {
     }
     .or_else(check_valid_insn)
     .or_else(check_sp_usage)
+    .or_else(check_jrra)
 }
 
 fn bool_then<T>(t: T, b: bool) -> Option<T> {

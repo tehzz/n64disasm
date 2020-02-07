@@ -164,7 +164,7 @@ fn process_block<'b>(
         ..
     } = label_state;
 
-    let sections = section_state.finish();
+    let sections = section_state.finish(&instructions);
 
     println!("Found sections in {}", &block.name);
     for section in sections {
