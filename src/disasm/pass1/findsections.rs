@@ -7,6 +7,7 @@ use crate::disasm::{
 };
 use std::num::NonZeroU32;
 use std::ops::Range;
+use log::{debug, info};
 
 ///! Deal with capstone's overeager disassembly of .data section into .text instructions,
 ///! and capstone problems with disassembling mips code.
@@ -115,7 +116,11 @@ impl<'a> FindSectionState<'a> {
         self.vaddr = Some(nz_vaddr);
     }
 
-    /// Reify the set of `Transition`s into correctly sized `.text` and `.data` sections.
+    /// Reify all of the `Transition`s into a sort `Vec<LoadSectionInfo>` that has.
+    /// the proper sizes for each of the `.text` and `.data` sections. The `Vec` 
+    /// is sorted by the memory range each section takes 
+    /// # Panic
+    /// Panics if there are any overlaping sections
     pub fn finish(self, insns: &[Instruction]) -> Vec<LoadSectionInfo> {
         use Transition::*;
 
@@ -136,6 +141,20 @@ impl<'a> FindSectionState<'a> {
             }
         }
 
+        sections.sort_unstable_by(|a, b| {
+            use std::cmp::Ordering;
+
+            let ar = &a.range;
+            let br = &b.range;
+
+            if ar.start < br.start && ar.end <= br.start {
+                Ordering::Less
+            } else if br.start < ar.start && br.end <= ar.start {
+                Ordering::Greater
+            } else {
+                panic!("Overlapping sections on sort:\n{:#x?}\n{:#x?}", a, b);
+            }
+        });
         sections
     }
 
@@ -190,7 +209,7 @@ fn get_text_data_sections(
 
         find_end.check_instructions(relevant_insns);
 
-        println!("{:4}{:#x?}", "", &find_end);
+        debug!("{:4}{:#x?}", "", &find_end);
     }
 
     let start = info.text.start;
@@ -328,8 +347,8 @@ impl FindFileEnd {
 
             if let Some(bad) = issue {
                 if bad == MalKinds::IllegalInsn {
-                    println!("{:2} Found {:?} instruction", "", &bad);
-                    println!("{:2} {:x?}", "", &insn);
+                    debug!("{:2} Found {:?} instruction", "", &bad);
+                    debug!("{:2} {:x?}", "", &insn);
                 }
             }
 
