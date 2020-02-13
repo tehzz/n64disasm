@@ -7,7 +7,7 @@ use crate::disasm::{
 };
 use std::num::NonZeroU32;
 use std::ops::Range;
-use log::{debug, info};
+use log::{debug};
 
 ///! Deal with capstone's overeager disassembly of .data section into .text instructions,
 ///! and capstone problems with disassembling mips code.

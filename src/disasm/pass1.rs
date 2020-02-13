@@ -18,9 +18,6 @@ use err_derive::Error;
 use linkinsn::{link_instructions, LinkInsnErr, LinkState};
 use log::info;
 use std::collections::HashMap;
-use std::fs::File;
-use std::io::{self, Read, Seek, SeekFrom};
-use std::path::Path;
 
 use findfiles::FindFileState;
 use findlabels::LabelState;
@@ -79,15 +76,14 @@ impl From<ResolvedBlock<'_>> for BlockInsn {
     }
 }
 
-pub fn pass1(config: Config, rom: &Path) -> P1Result<Pass1> {
+pub fn pass1(config: Config, rom: &[u8]) -> P1Result<Pass1> {
     let Config {
         memory: memory_map,
         labels: mut config_labels,
     } = config;
     let cs = csutil::get_instance()?;
 
-    let mut rom = File::open(rom)?;
-    let read_rom = |block| read_codeblock(block, &mut rom);
+    let read_rom = |block| read_codeblock(block, &rom);
     let proc_insns = |res| process_block(res, &config_labels, &cs);
 
     let labeled_blocks = memory_map
@@ -112,27 +108,23 @@ pub fn pass1(config: Config, rom: &Path) -> P1Result<Pass1> {
 }
 
 /// Helper function to read a `CodeBlock`'s raw bytes from the ROM
-fn read_codeblock<'a>(
+fn read_codeblock<'a, 'b>(
     block: &'a CodeBlock,
-    rom: &mut File,
-) -> io::Result<(&'a CodeBlock, Vec<u8>)> {
-    let (start, size) = block.range.get_rom_offsets();
-    let mut buf = vec![0u8; size];
+    rom: &'b [u8],
+) -> (&'a CodeBlock, &'b [u8]) {
+    let (start, end) = block.range.get_rom_offsets();
+    let block_data = &rom[start..end];
 
-    rom.seek(SeekFrom::Start(start))?;
-    rom.read_exact(&mut buf)?;
-
-    Ok((block, buf))
+    (block, block_data)
 }
 
 fn process_block<'b>(
-    res: io::Result<(&'b CodeBlock, Vec<u8>)>,
+    (block, buf): (&'b CodeBlock, &'_ [u8]),
     labels: &'_ LabelSet,
     cs: &'_ Capstone,
 ) -> P1Result<LabeledBlock<'b>> {
-    let (block, buf) = res?;
     let block_vaddr = block.range.get_text_vaddr() as u64;
-    let cs_instructions = cs.disasm_all(&buf, block_vaddr)?;
+    let cs_instructions = cs.disasm_all(buf, block_vaddr)?;
     let num_insn = cs_instructions.len();
 
     info!("Found {} instructions in block '{}'", num_insn, &block.name);

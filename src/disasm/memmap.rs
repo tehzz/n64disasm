@@ -87,8 +87,8 @@ impl MemoryMap {
         // maybe add in BSS sorting? add CMP to BlockRange?
         //parsed_config.blocks.sort_unstable_by(|a, b| a.range.ram_start.cmp(&b.range.ram_start));
 
-        let valid_base_overlays = create_base_ovl_set(&parsed_config);
-        let overlay_sets = create_overlay_map(raw_ovl_sets, &valid_base_overlays, &parsed_config)?;
+        let base_ovl_to_dyn_ovl = create_base_ovl_set(&parsed_config);
+        let overlay_sets = create_overlay_map(raw_ovl_sets, &base_ovl_to_dyn_ovl, &parsed_config)?;
         let overlay_set_cache = cache_overlay_blocks(&overlay_sets, &parsed_config);
 
         let FoldBlockAcc {
@@ -281,7 +281,7 @@ fn create_base_ovl_set(info: &FoldBlockAcc) -> OverlaySet {
 /// Note that the paired set includes the "main" overlay itself.
 fn create_overlay_map(
     sets: HashMap<String, Vec<String>>,
-    possible_base_overlays: &OverlaySet,
+    base_to_dyn_overlays: &OverlaySet,
     info: &FoldBlockAcc,
 ) -> Result<OverlaySet, MemoryMapErr> {
     use MemoryMapErr::UnkOvl;
@@ -289,6 +289,7 @@ fn create_overlay_map(
     let ovl_count = info.overlays.len();
 
     let mut map = OverlaySet::with_capacity(ovl_count);
+    // buffer of overlay names in a given overlay set from the config
     let mut buffer: Vec<&BlockName> = Vec::with_capacity(ovl_count);
     for (set_name, overlay_set) in sets {
         for s in overlay_set {
@@ -300,7 +301,7 @@ fn create_overlay_map(
             buffer.push(ovl);
         }
 
-        let valid_base_overlays = possible_base_overlays
+        let valid_base_overlays = base_to_dyn_overlays
             .iter()
             .filter(|(_, valids)| buffer.iter().all(|ovl| valids.contains(*ovl)))
             .map(|(name, _)| name)
@@ -364,10 +365,10 @@ pub struct BlockRange {
 impl BlockRange {
     /// get the ROM location and size of the block in the proper numeric types
     /// to use with `io::Read`
-    pub fn get_rom_offsets(&self) -> (u64, usize) {
+    pub fn get_rom_offsets(&self) -> (usize, usize) {
         (
-            self.rom_start as u64,
-            (self.rom_end - self.rom_start) as usize,
+            self.rom_start as usize,
+            self.rom_end as usize,
         )
     }
 
@@ -400,14 +401,14 @@ impl BlockRange {
 
     pub fn intersects(&self, other: &Self) -> bool {
         self.contains(other.ram_start)
-            || self.contains(other.ram_end)
+            || self.contains(other.ram_end - 1)
             || other
                 .bss_start
                 .map(|a| self.contains(a.get()))
                 .unwrap_or(false)
             || other
                 .bss_end
-                .map(|a| self.contains(a.get()))
+                .map(|a| self.contains(a.get() - 1))
                 .unwrap_or(false)
     }
 }
@@ -454,7 +455,7 @@ mod test {
         let block2 = BlockRange::from((0, 0x400, 0x1000));
 
         assert!(
-            !block1.intersects(&block2),
+            !block1.intersects(&block2) && !block2.intersects(&block1),
             "Blocks should not intersect even if one ends where another begins"
         );
 
@@ -462,8 +463,16 @@ mod test {
         let block2bss = BlockRange::from((0, 0x400, 0x1000, 0x2200, 0x22A0));
 
         assert!(
-            !block1bss.intersects(&block2bss),
+            !block1bss.intersects(&block2bss) && !block2bss.intersects(&block1bss),
             "Blocks including BSS should not intersect even if one ends where another begins"
+        );
+
+        let b1bsstext = BlockRange::from((0x43220, 0x800C7840, 0xEA70, 0x800D62B0, 0x800D6490));
+        let b2bsstext = BlockRange::from((0x51C90, 0x800D6490, 0x5A8B0, 0x80130D40, 0x80131B00));
+        
+        assert!(
+            !b1bsstext.intersects(&b2bsstext) && !b2bsstext.intersects(&b1bsstext),
+            "Blocks whose BSS ends where the next block's text begin should not intersect"
         );
     }
     #[test]
@@ -472,7 +481,7 @@ mod test {
         let block2 = BlockRange::from((0, 0x200, 0x1000));
 
         assert!(
-            block1.intersects(&block2),
+            block1.intersects(&block2) && block2.intersects(&block1),
             "Blocks with overlapping RAM areas should intersect"
         );
 
@@ -480,7 +489,7 @@ mod test {
         let block2bss = BlockRange::from((0, 0x400, 0x1000, 0x2000, 0x22A0));
 
         assert!(
-            block1bss.intersects(&block2bss),
+            block1bss.intersects(&block2bss) && block2bss.intersects(&block1bss),
             "Blocks with overlapping BSS areas should intersect"
         );
     }

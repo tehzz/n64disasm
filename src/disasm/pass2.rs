@@ -64,7 +64,7 @@ pub fn pass2(p1result: Pass1, out: &Path) -> P2Result<()> {
     let nf_syms = out.join("not-found-sym.ld");
     write_notfound_symbols(&nf_syms, &info.not_found_labels).map_err(E::NFSym)?;
 
-    for block in blocks.into_iter().take(7) {
+    for block in blocks.into_iter().take(10) {
         let name = &block.name;
         let name_str: &str = &name;
         let name_os = OsStr::new(name_str);

@@ -25,8 +25,10 @@ pub enum DisasmError {
     Pass1(#[error(source)] Pass1Error),
     #[error(display = "Issue with pass 2 of disassembly")]
     Pass2(#[error(source)] Pass2Error),
+    #[error(display = "Issue reading ROM into memory")]
+    Rom(#[error(no_from, source)] ::std::io::Error),
     #[error(display = "Issue creating output directory")]
-    Io(#[error(source)] ::std::io::Error),
+    OutDir(#[error(no_from, source)] ::std::io::Error),
 }
 
 pub fn disasm_all(config: Config, opts: Opts) -> Result<(), DisasmError> {
@@ -38,6 +40,7 @@ pub fn disasm_all(config: Config, opts: Opts) -> Result<(), DisasmError> {
         config: config_path,
     } = opts;
 
+    let rom = fs::read(&rom).map_err(E::Rom)?;
     let pass1 = pass1(config, &rom)?;
 
     debug!("{}", &pass1.labels);
@@ -51,7 +54,7 @@ pub fn disasm_all(config: Config, opts: Opts) -> Result<(), DisasmError> {
         return Err(E::NotOutDir(outdir));
     }
 
-    fs::create_dir_all(&outdir)?;
+    fs::create_dir_all(&outdir).map_err(E::OutDir)?;
 
     pass2(pass1, &outdir)?;
 
