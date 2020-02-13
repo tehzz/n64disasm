@@ -1,3 +1,4 @@
+mod boolext;
 mod config;
 mod disasm;
 

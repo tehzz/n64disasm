@@ -1,9 +1,17 @@
 //! Utilities for dealing with capstone issues and warts
 use crate::disasm::{
     instruction::Instruction,
-    mipsvals::{INS_ADDU, INS_MFC0, INS_MOVE, INS_MTC0, INS_OR},
+    mipsvals::{INS_ADDU, INS_MFC0, INS_MOVE, INS_MTC0, INS_OR, MIPS3_INSNS},
 };
 use capstone::{arch::mips::MipsOperand, arch::mips::MipsReg::*, prelude::*};
+use once_cell::sync::Lazy;
+use std::collections::HashSet;
+
+/// Capstone does not have a MIPS3 disassembly target, so this `HashSet` is
+/// here to check if a disassembled instruction is actually a mips3 instruction,
+/// or if it is an instruction from a later instruction set.
+pub static VALID_MIPS3_INSNS: Lazy<HashSet<u32>> =
+    Lazy::new(|| MIPS3_INSNS.iter().map(|insn| *insn as u32).collect());
 
 pub fn get_instance() -> Result<Capstone, capstone::Error> {
     Capstone::new()

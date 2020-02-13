@@ -111,11 +111,9 @@ impl Instruction {
     }
 
     pub fn contains_reg(&self, reg: RegId) -> bool {
-        self.operands.iter().any(|op| {
-            match op {
-                Reg(r) => *r == reg,
-                _ => false,
-            }
+        self.operands.iter().any(|op| match op {
+            Reg(r) => *r == reg,
+            _ => false,
         })
     }
 }

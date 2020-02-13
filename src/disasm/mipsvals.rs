@@ -93,7 +93,7 @@ pub const CALLER_SAVED_REGS: [RegId; 19] = [
 ];
 
 // Valid mipsIII instructions since capstone doesn't have a working mipsIII mode
-pub const MIPS3_INSN: &[MipsInsn] = &[
+pub const MIPS3_INSNS: &[MipsInsn] = &[
     MIPS_INS_ADD,
     MIPS_INS_ADDU,
     MIPS_INS_ADDI,
