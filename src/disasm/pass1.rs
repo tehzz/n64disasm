@@ -108,10 +108,7 @@ pub fn pass1(config: Config, rom: &[u8]) -> P1Result<Pass1> {
 }
 
 /// Helper function to read a `CodeBlock`'s raw bytes from the ROM
-fn read_codeblock<'a, 'b>(
-    block: &'a CodeBlock,
-    rom: &'b [u8],
-) -> (&'a CodeBlock, &'b [u8]) {
+fn read_codeblock<'a, 'b>(block: &'a CodeBlock, rom: &'b [u8]) -> (&'a CodeBlock, &'b [u8]) {
     let (start, end) = block.range.get_rom_offsets();
     let block_data = &rom[start..end];
 

@@ -366,10 +366,7 @@ impl BlockRange {
     /// get the ROM location and size of the block in the proper numeric types
     /// to use with `io::Read`
     pub fn get_rom_offsets(&self) -> (usize, usize) {
-        (
-            self.rom_start as usize,
-            self.rom_end as usize,
-        )
+        (self.rom_start as usize, self.rom_end as usize)
     }
 
     pub fn get_text_vaddr(&self) -> u32 {
@@ -469,7 +466,7 @@ mod test {
 
         let b1bsstext = BlockRange::from((0x43220, 0x800C7840, 0xEA70, 0x800D62B0, 0x800D6490));
         let b2bsstext = BlockRange::from((0x51C90, 0x800D6490, 0x5A8B0, 0x80130D40, 0x80131B00));
-        
+
         assert!(
             !b1bsstext.intersects(&b2bsstext) && !b2bsstext.intersects(&b1bsstext),
             "Blocks whose BSS ends where the next block's text begin should not intersect"

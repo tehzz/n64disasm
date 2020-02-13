@@ -5,9 +5,9 @@ use crate::disasm::{
     memmap::{CodeBlock, Section},
     pass1::FileBreak,
 };
+use log::debug;
 use std::num::NonZeroU32;
 use std::ops::Range;
-use log::{debug};
 
 ///! Deal with capstone's overeager disassembly of .data section into .text instructions,
 ///! and capstone problems with disassembling mips code.
@@ -117,8 +117,8 @@ impl<'a> FindSectionState<'a> {
     }
 
     /// Reify all of the `Transition`s into a sort `Vec<LoadSectionInfo>` that has.
-    /// the proper sizes for each of the `.text` and `.data` sections. The `Vec` 
-    /// is sorted by the memory range each section takes 
+    /// the proper sizes for each of the `.text` and `.data` sections. The `Vec`
+    /// is sorted by the memory range each section takes
     /// # Panic
     /// Panics if there are any overlaping sections
     pub fn finish(self, insns: &[Instruction]) -> Vec<LoadSectionInfo> {
