@@ -4,11 +4,11 @@ use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
 use std::num::NonZeroU32;
 use std::ops::Deref;
-use std::rc::Rc;
+use std::sync::Arc;
 
 /// A wrapper struct for a code block's name
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct BlockName(Rc<str>);
+pub struct BlockName(Arc<str>);
 
 impl Deref for BlockName {
     type Target = str;
@@ -26,13 +26,13 @@ impl std::fmt::Display for BlockName {
 
 impl From<String> for BlockName {
     fn from(s: String) -> Self {
-        Self(Rc::from(s))
+        Self(Arc::from(s))
     }
 }
 
-impl Into<Rc<str>> for BlockName {
-    fn into(self) -> Rc<str> {
-        self.0
+impl Into<String> for BlockName {
+    fn into(self) -> String {
+        (*self.0).into()
     }
 }
 
@@ -55,7 +55,7 @@ pub type OverlaySet = HashMap<BlockName, HashSet<BlockName>>;
 #[derive(Debug, Error)]
 pub enum MemoryMapErr {
     #[error(display = "Block at ROM {:#x} has a repeated name <{}>", _1, _0)]
-    RepeatedOvlName(Rc<str>, u32),
+    RepeatedOvlName(String, u32),
     #[error(display = "Unknown Overlay \"{}\" in Overlay Set \"{}\"", _1, _0)]
     UnkOvl(String, String),
 }

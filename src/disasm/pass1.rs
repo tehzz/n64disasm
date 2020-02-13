@@ -13,11 +13,11 @@ use crate::disasm::{
     labels::{Label, LabelSet},
     memmap::{BlockName, CodeBlock, MemoryMap},
 };
-use capstone::prelude::*;
 use err_derive::Error;
 use linkinsn::{link_instructions, LinkInsnErr, LinkState};
 use log::info;
 use std::collections::HashMap;
+use rayon::prelude::*;
 
 use findfiles::FindFileState;
 use findlabels::LabelState;
@@ -81,14 +81,13 @@ pub fn pass1(config: Config, rom: &[u8]) -> P1Result<Pass1> {
         memory: memory_map,
         labels: mut config_labels,
     } = config;
-    let cs = csutil::get_instance()?;
 
     let read_rom = |block| read_codeblock(block, &rom);
-    let proc_insns = |res| process_block(res, &config_labels, &cs);
+    let proc_insns = |res| process_block(res, &config_labels);
 
     let labeled_blocks = memory_map
         .blocks
-        .iter()
+        .par_iter()
         .map(read_rom)
         .map(proc_insns)
         .collect::<P1Result<Vec<_>>>()?;
@@ -118,8 +117,8 @@ fn read_codeblock<'a, 'b>(block: &'a CodeBlock, rom: &'b [u8]) -> (&'a CodeBlock
 fn process_block<'b>(
     (block, buf): (&'b CodeBlock, &'_ [u8]),
     labels: &'_ LabelSet,
-    cs: &'_ Capstone,
 ) -> P1Result<LabeledBlock<'b>> {
+    let cs = csutil::get_instance()?;
     let block_vaddr = block.range.get_text_vaddr() as u64;
     let cs_instructions = cs.disasm_all(buf, block_vaddr)?;
     let num_insn = cs_instructions.len();
