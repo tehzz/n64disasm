@@ -7,6 +7,7 @@ use capstone::{
 };
 use err_derive::Error;
 use std::convert::TryInto;
+use std::fmt;
 
 #[derive(Debug, Error)]
 pub enum InsnParseErr {
@@ -116,5 +117,16 @@ impl Instruction {
                 _ => false,
             }
         })
+    }
+}
+
+impl fmt::Display for Instruction {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", &self.mnemonic)?;
+        if let Some(ref s) = self.op_str {
+            write!(f, " {}", s)?;
+        }
+
+        Ok(())
     }
 }
