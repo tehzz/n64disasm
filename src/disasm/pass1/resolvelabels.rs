@@ -21,10 +21,17 @@ use crate::disasm::{
     instruction::Instruction,
     labels::{Label, LabelSet},
     memmap::{AddrLocation, BlockName, CodeBlock, MemoryMap},
-    pass1::findlabels::ConfigLabelLoc,
+    pass1::{findlabels::ConfigLabelLoc, BlockLoadedSections},
 };
+use err_derive::Error;
 use log::{debug, info};
 use std::collections::HashMap;
+
+#[derive(Debug, Error)]
+pub enum ResolveLabelsErr {
+    #[error(display = "Lost sections for block {} after labels were resolved", _0)]
+    MissingSec(BlockName),
+}
 
 #[derive(Debug)]
 pub struct ResolvedBlock<'c> {
@@ -32,10 +39,14 @@ pub struct ResolvedBlock<'c> {
     pub label_loc_cache: HashMap<u32, LabelPlace>,
     pub multi_block_labels: Option<Vec<Label>>,
     pub info: &'c CodeBlock,
+    pub loaded_sections: BlockLoadedSections,
 }
 
 impl<'c> ResolvedBlock<'c> {
-    fn from_processed(block: ProcessedBlock<'c>) -> (Self, Option<Vec<Label>>) {
+    fn from_processed(
+        block: ProcessedBlock<'c>,
+        loaded_sections: BlockLoadedSections,
+    ) -> (Self, Option<Vec<Label>>) {
         let (multi_block_labels, not_found) = block.unresolved.into_components();
 
         (
@@ -44,6 +55,7 @@ impl<'c> ResolvedBlock<'c> {
                 label_loc_cache: block.label_loc_cache,
                 multi_block_labels,
                 info: block.info,
+                loaded_sections,
             },
             not_found,
         )
@@ -51,6 +63,45 @@ impl<'c> ResolvedBlock<'c> {
 }
 
 pub type NotFoundLabels = HashMap<u32, Label>;
+
+pub fn resolve<'c>(
+    label_set: &mut LabelSet,
+    memory_map: &MemoryMap,
+    blocks: Vec<LabeledBlock<'c>>,
+) -> Result<(Vec<ResolvedBlock<'c>>, NotFoundLabels), ResolveLabelsErr> {
+    use ResolveLabelsErr::*;
+
+    let n = blocks.len();
+    let (ext_only_blocks, mut block_sections) = add_internal_labels_to_set(label_set, blocks);
+    let pass1_ext_blocks =
+        pass1_external_labels(label_set, memory_map, &block_sections, ext_only_blocks);
+
+    let output_acc = (Vec::with_capacity(n), NotFoundLabels::new());
+    pass1_ext_blocks
+        .into_iter()
+        .map(move |block| {
+            let sections = block_sections
+                .remove(&block.info.name)
+                .ok_or_else(|| MissingSec(block.info.name.clone()))?;
+
+            Ok((block, sections))
+        })
+        .try_fold(output_acc, |mut acc, res| {
+            let (mut block, loaded_sections) = res?;
+
+            pass2_multi_labels(&mut block, label_set);
+
+            let (resolved_block, not_found) = ResolvedBlock::from_processed(block, loaded_sections);
+
+            if let Some(labels) = not_found {
+                acc.1.extend(labels.into_iter().map(|l| (l.addr, l)));
+            };
+
+            acc.0.push(resolved_block);
+
+            Ok(acc)
+        })
+}
 
 #[derive(Debug, Clone)]
 pub enum LabelPlace {
@@ -61,66 +112,50 @@ pub enum LabelPlace {
     External(BlockName),
 }
 
-pub fn resolve<'c>(
-    label_set: &mut LabelSet,
-    memory_map: &MemoryMap,
-    blocks: Vec<LabeledBlock<'c>>,
-) -> (Vec<ResolvedBlock<'c>>, NotFoundLabels) {
-    let n = blocks.len();
-    let ext_only_blocks = add_internal_labels_to_set(label_set, blocks);
-    let pass1_ext_blocks = pass1_external_labels(label_set, memory_map, ext_only_blocks);
-
-    let output_acc = (Vec::with_capacity(n), NotFoundLabels::new());
-    pass1_ext_blocks
-        .into_iter()
-        .fold(output_acc, |mut acc, mut block| {
-            pass2_multi_labels(&mut block, label_set);
-
-            let (resolved_block, not_found) = ResolvedBlock::from_processed(block);
-
-            if let Some(labels) = not_found {
-                acc.1.extend(labels.into_iter().map(|l| (l.addr, l)));
-            };
-
-            acc.0.push(resolved_block);
-
-            acc
-        })
+impl From<ConfigLabelLoc> for LabelPlace {
+    fn from(loc: ConfigLabelLoc) -> Self {
+        match loc {
+            ConfigLabelLoc::Internal => Self::Internal,
+            ConfigLabelLoc::Global => Self::Global,
+        }
+    }
 }
 
 pub struct LabeledBlock<'c> {
     pub instructions: Vec<Instruction>,
     pub info: &'c CodeBlock,
+    pub loaded_sections: BlockLoadedSections,
     pub internal_labels: HashMap<u32, Label>,
     pub external_labels: HashMap<u32, Label>,
-    pub config_labels: HashMap<u32, ConfigLabelLoc>,
+    pub existing_labels: HashMap<u32, ConfigLabelLoc>,
 }
 
+type LabeledBlockComponents<'a> = (
+    ExternLabeledBlock<'a>,
+    BlockLoadedSections,
+    HashMap<u32, Label>,
+);
+
 impl<'c> LabeledBlock<'c> {
-    fn into_extern_labeled(self) -> (ExternLabeledBlock<'c>, HashMap<u32, Label>) {
+    fn into_extern_labeled(self) -> LabeledBlockComponents<'c> {
         let Self {
             instructions,
             info,
+            loaded_sections,
             internal_labels,
             external_labels,
-            config_labels,
+            existing_labels,
         } = self;
-        let n = internal_labels.len() + external_labels.len() + config_labels.len();
-        let config_iter = config_labels.into_iter().map(|(addr, loc)| {
-            (
-                addr,
-                match loc {
-                    ConfigLabelLoc::Internal => LabelPlace::Internal,
-                    ConfigLabelLoc::Global => LabelPlace::Global,
-                },
-            )
-        });
+        let n = internal_labels.len() + external_labels.len() + existing_labels.len();
+        let existing_iter = existing_labels
+            .into_iter()
+            .map(|(addr, loc)| (addr, loc.into()));
 
         let label_loc_cache = internal_labels
             .keys()
             .copied()
             .map(|addr| (addr, LabelPlace::Internal))
-            .chain(config_iter)
+            .chain(existing_iter)
             .fold(HashMap::with_capacity(n), |mut map, l| {
                 map.insert(l.0, l.1);
                 map
@@ -133,6 +168,7 @@ impl<'c> LabeledBlock<'c> {
                 external_labels,
                 label_loc_cache,
             },
+            loaded_sections,
             internal_labels,
         )
     }
@@ -193,13 +229,16 @@ impl<'c> UnresolvedBlockLabels {
     }
 }
 
-fn add_internal_labels_to_set<'c>(
+type BlockSections<'a> = HashMap<&'a BlockName, BlockLoadedSections>;
+type ExBlockAccum<'a> = (Vec<ExternLabeledBlock<'a>>, BlockSections<'a>);
+
+fn add_internal_labels_to_set<'a>(
     label_set: &mut LabelSet,
-    blocks: Vec<LabeledBlock<'c>>,
-) -> Vec<ExternLabeledBlock<'c>> {
+    blocks: Vec<LabeledBlock<'a>>,
+) -> ExBlockAccum<'a> {
     let fold_into_externblock =
-        |mut acc: Vec<ExternLabeledBlock<'c>>,
-         (extrn_block, internal_labels): (ExternLabeledBlock<'c>, HashMap<u32, Label>)| {
+        |mut acc: ExBlockAccum<'a>,
+         (extrn_block, sections, internal_labels): LabeledBlockComponents<'a>| {
             let block_name = &extrn_block.info.name;
 
             // All internal `Label`s have their block name set; this only
@@ -216,12 +255,15 @@ fn add_internal_labels_to_set<'c>(
                 label_set.globals.extend(adj_label_iter);
             }
 
-            acc.push(extrn_block);
+            acc.0.push(extrn_block);
+            acc.1.insert(block_name, sections);
 
             acc
         };
 
-    let output = Vec::with_capacity(blocks.len());
+    let n = blocks.len();
+    let output = (Vec::with_capacity(n), HashMap::with_capacity(n));
+
     blocks
         .into_iter()
         .map(LabeledBlock::into_extern_labeled)
@@ -230,11 +272,12 @@ fn add_internal_labels_to_set<'c>(
 
 /// Attempt to resolve the location of external labels from a block of `blocks`
 /// based on the address of that label, and that block's memory map
-fn pass1_external_labels<'c>(
+fn pass1_external_labels<'a>(
     label_set: &mut LabelSet,
     memory_map: &MemoryMap,
-    blocks: Vec<ExternLabeledBlock<'c>>,
-) -> Vec<ProcessedBlock<'c>> {
+    sections: &BlockSections<'a>,
+    blocks: Vec<ExternLabeledBlock<'a>>,
+) -> Vec<ProcessedBlock<'a>> {
     use AddrLocation::*;
 
     let mut output = Vec::with_capacity(blocks.len());
@@ -272,7 +315,8 @@ fn pass1_external_labels<'c>(
                         .push(label);
                 }
                 Single(block) => {
-                    if let Some(ovl_labels) = label_set.overlays.get_mut(&block) {
+                    let stored_label = if let Some(ovl_labels) = label_set.overlays.get_mut(&block)
+                    {
                         debug!(
                             "{:8}Found single label from '{}' into '{}': {:x?}",
                             "", &block_name, &block, &label
@@ -280,11 +324,12 @@ fn pass1_external_labels<'c>(
                         proc_block
                             .label_loc_cache
                             .insert(addr, LabelPlace::External(block.clone()));
+
                         ovl_labels.entry(addr).or_insert_with(|| {
                             debug!("{:10}Label not found; inserted!", "");
                             label.set_overlay(&block);
                             label
-                        });
+                        })
                     } else {
                         // must be a label from a global symbol
                         debug!(
@@ -292,15 +337,22 @@ fn pass1_external_labels<'c>(
                             "", &block_name, &block, &label
                         );
                         proc_block.label_loc_cache.insert(addr, LabelPlace::Global);
+
                         label_set.globals.entry(addr).or_insert_with(|| {
                             debug!("{:10}Global label not found; inserted!", "");
                             label.set_global();
                             label
-                        });
+                        })
+                    };
+
+                    let label_section = sections[&block].find_address(addr);
+                    if let Some(section) = label_section {
+                        stored_label.update_kind(section.kind);
                     }
                 }
             }
         }
+
         let unres = proc_block
             .unresolved
             .multiple
@@ -313,6 +365,7 @@ fn pass1_external_labels<'c>(
             .as_ref()
             .map(Vec::len)
             .unwrap_or(0);
+
         info!(
             "{:4}Ended with {} unresovled labels and {} not found labels",
             "", unres, notfound

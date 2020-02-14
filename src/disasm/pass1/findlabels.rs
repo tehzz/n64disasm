@@ -2,13 +2,14 @@ use crate::disasm::labels::{Label, LabelSet};
 use crate::disasm::memmap::{BlockName, BlockRange};
 use crate::disasm::pass1::{
     linkinsn::{Link, LinkedVal},
-    Instruction, JumpKind,
+    BlockLoadedSections, Instruction, JumpKind,
 };
 use std::collections::HashMap;
 
 /// A collection of addresses and labels generated from parsing instructions.
 /// The labels in `internals` and `externals` are all not named, and will have
-/// auto-generated name. For named labels, the `config_labels` map  
+/// auto-generated name. Named labels will come from the config, and are located
+/// in the `existing_labels` map
 #[derive(Debug)]
 pub struct LabelState<'c> {
     name: &'c BlockName,
@@ -21,9 +22,9 @@ pub struct LabelState<'c> {
     pub internals: HashMap<u32, Label>,
     /// subroutines or data that are not in the current block
     pub externals: HashMap<u32, Label>,
-    /// Addresses that have labels in the config maps.
+    /// Addresses that have labels in the existing maps, typicall from the config.
     /// These labels will be either global or internal
-    pub config_labels: HashMap<u32, ConfigLabelLoc>,
+    pub existing_labels: HashMap<u32, ConfigLabelLoc>,
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -43,7 +44,7 @@ impl<'c> LabelState<'c> {
             config_ovl: set.overlays.get(name),
             internals: HashMap::new(),
             externals: HashMap::new(),
-            config_labels: HashMap::new(),
+            existing_labels: HashMap::new(),
         }
     }
 
@@ -70,20 +71,34 @@ impl<'c> LabelState<'c> {
         }
     }
 
+    /// Check that all of the internal labels are in the proper loaded (.text or .data)
+    /// sections. There can be mismatches due to things like used function pointers
+    /// before reaching a routine
+    pub fn ensure_internal_label_section(&mut self, sections: &BlockLoadedSections) {
+        self.internals
+            .iter_mut()
+            .filter_map(|(&addr, label)| {
+                sections
+                    .find_address(addr)
+                    .map(|section| (label, section.kind))
+            })
+            .for_each(|(label, section)| label.update_kind(section));
+    }
+
     /// check if a given addr is a known label from the config file,
     /// either in the global label map, or in this overlay's map (if applicable)
     fn addr_in_config(&mut self, addr: u32) -> bool {
-        if self.config_labels.contains_key(&addr) {
+        if self.existing_labels.contains_key(&addr) {
             true
         } else if self.config_global.contains_key(&addr) {
-            self.config_labels.insert(addr, ConfigLabelLoc::Global);
+            self.existing_labels.insert(addr, ConfigLabelLoc::Global);
             true
         } else if self
             .config_ovl
             .map(|s| s.contains_key(&addr))
             .unwrap_or(false)
         {
-            self.config_labels.insert(addr, ConfigLabelLoc::Internal);
+            self.existing_labels.insert(addr, ConfigLabelLoc::Internal);
             true
         } else {
             false

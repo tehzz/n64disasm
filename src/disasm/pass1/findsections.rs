@@ -6,6 +6,7 @@ use crate::disasm::{
     pass1::FileBreak,
 };
 use log::debug;
+use std::cmp::Ordering;
 use std::num::NonZeroU32;
 use std::ops::Range;
 
@@ -26,18 +27,21 @@ use std::ops::Range;
 ///!     of those registers indicates an improperly decoded instruction.
 
 #[derive(Debug)]
+pub struct BlockLoadedSections(Box<[LoadSectionInfo]>);
+
+#[derive(Debug, Clone)]
+pub struct LoadSectionInfo {
+    pub kind: Section,
+    pub range: Range<u32>,
+}
+
+#[derive(Debug)]
 pub struct FindSectionState<'a> {
     vaddr: Option<NonZeroU32>,
     text_start: Option<NonZeroU32>,
     last_break: Breaks,
     transitions: Vec<Transition>,
     block: &'a CodeBlock,
-}
-
-#[derive(Debug, Clone)]
-pub struct LoadSectionInfo {
-    pub kind: Section,
-    pub range: Range<u32>,
 }
 
 #[derive(Debug, Copy, Clone, Default)]
@@ -57,6 +61,46 @@ struct TextEndInfo {
     text: Range<u32>,
     data_end: u32,
     breaks: Breaks,
+}
+
+impl BlockLoadedSections {
+    pub fn find_address(&self, addr: u32) -> Option<&LoadSectionInfo> {
+        self.0
+            .binary_search_by(|probe| probe.find_addr(addr))
+            .ok()
+            .map(|i| &self.0[i])
+    }
+}
+
+impl From<Vec<LoadSectionInfo>> for BlockLoadedSections {
+    fn from(vec: Vec<LoadSectionInfo>) -> Self {
+        Self(vec.into_boxed_slice())
+    }
+}
+
+impl LoadSectionInfo {
+    fn find_addr(&self, addr: u32) -> Ordering {
+        if self.range.contains(&addr) {
+            Ordering::Equal
+        } else if self.range.start > addr {
+            Ordering::Greater
+        } else {
+            Ordering::Less
+        }
+    }
+
+    fn data(range: Range<u32>) -> Self {
+        Self {
+            kind: Section::Data,
+            range,
+        }
+    }
+    fn text(range: Range<u32>) -> Self {
+        Self {
+            kind: Section::Text,
+            range,
+        }
+    }
 }
 
 impl<'a> FindSectionState<'a> {
@@ -116,12 +160,12 @@ impl<'a> FindSectionState<'a> {
         self.vaddr = Some(nz_vaddr);
     }
 
-    /// Reify all of the `Transition`s into a sort `Vec<LoadSectionInfo>` that has.
-    /// the proper sizes for each of the `.text` and `.data` sections. The `Vec`
-    /// is sorted by the memory range each section takes
+    /// Reify all of the `Transition`s into a sorted `BlockLoadedSections` that has
+    /// the proper sizes for each of the `.text` and `.data` sections. The returning
+    /// `BlockLoadedSections` is sorted by the memory range each section takes.
     /// # Panic
     /// Panics if there are any overlaping sections
-    pub fn finish(self, insns: &[Instruction]) -> Vec<LoadSectionInfo> {
+    pub fn finish(self, insns: &[Instruction]) -> BlockLoadedSections {
         use Transition::*;
 
         let final_pc = self.vaddr.expect("Non-null insn address").get() + 4;
@@ -142,8 +186,6 @@ impl<'a> FindSectionState<'a> {
         }
 
         sections.sort_unstable_by(|a, b| {
-            use std::cmp::Ordering;
-
             let ar = &a.range;
             let br = &b.range;
 
@@ -155,7 +197,8 @@ impl<'a> FindSectionState<'a> {
                 panic!("Overlapping sections on sort:\n{:#x?}\n{:#x?}", a, b);
             }
         });
-        sections
+
+        sections.into()
     }
 
     fn end_text_block(&self, text: Range<u32>, data_end: u32) -> Transition {
@@ -227,22 +270,6 @@ fn get_text_data_sections(
     let data = LoadSectionInfo::data(new_end..data_end);
 
     once(text).chain(once(data))
-}
-
-impl LoadSectionInfo {
-    fn data(range: Range<u32>) -> Self {
-        Self {
-            kind: Section::Data,
-            range,
-        }
-    }
-
-    fn text(range: Range<u32>) -> Self {
-        Self {
-            kind: Section::Text,
-            range,
-        }
-    }
 }
 
 impl Breaks {

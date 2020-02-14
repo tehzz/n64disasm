@@ -1,5 +1,5 @@
 use crate::config::RawLabel;
-use crate::disasm::memmap::BlockName;
+use crate::disasm::memmap::{BlockName, Section};
 use err_derive::Error;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -10,6 +10,7 @@ pub enum LabelKind {
     Local,
     // subroutine start, typically
     Routine,
+    // a pointer to some sort of data (.data, .rodata, .bss)
     Data,
     // named label from input config file
     Named(String),
@@ -103,6 +104,25 @@ impl Label {
             addr,
             kind: LabelKind::Data,
             location: ovl.into(),
+        }
+    }
+
+    /// Ensure that `Label` self is in the proper section; update the label if that is not the case
+    pub fn update_kind(&mut self, section: Section) {
+        match (section, &self.kind) {
+            (Section::Data, LabelKind::Routine) => {
+                println!("{:4}Update label kind to Data: {:x?}", "", &self);
+                self.kind = LabelKind::Data;
+            }
+            (Section::Text, LabelKind::Data) => {
+                println!("{:4}Update label kind to Text: {:x?}", "", &self);
+                self.kind = LabelKind::Routine;
+            }
+            // (Section::Data, LabelKind::Local) => Probably a branch target of a data word
+            //          improperly parsed by capstone as an instruction. Leave these alone
+
+            // Other sections aren't important for updating
+            _ => (),
         }
     }
 }

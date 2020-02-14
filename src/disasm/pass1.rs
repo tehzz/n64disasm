@@ -16,8 +16,8 @@ use crate::disasm::{
 use err_derive::Error;
 use linkinsn::{link_instructions, LinkInsnErr, LinkState};
 use log::info;
-use std::collections::HashMap;
 use rayon::prelude::*;
+use std::collections::HashMap;
 
 use findfiles::FindFileState;
 use findlabels::LabelState;
@@ -26,9 +26,10 @@ use resolvelabels::LabeledBlock;
 use routinenl::NLState;
 
 pub use findfiles::FileBreak;
+pub use findsections::{BlockLoadedSections, LoadSectionInfo};
 pub use jumps::JumpKind;
 pub use linkinsn::{Link, LinkedVal};
-pub use resolvelabels::{LabelPlace, ResolvedBlock};
+pub use resolvelabels::{LabelPlace, ResolveLabelsErr, ResolvedBlock};
 
 #[derive(Debug, Error)]
 pub enum Pass1Error {
@@ -36,8 +37,8 @@ pub enum Pass1Error {
     LinkInsn(#[error(source)] LinkInsnErr),
     #[error(display = "Problem parsing capstone instruction")]
     InsnParse(#[error(source)] InsnParseErr),
-    #[error(display = "Problem reading ROM in pass 1 disassembly")]
-    Io(#[error(source)] ::std::io::Error),
+    #[error(display = "Problem resolving the location of labels")]
+    LabelRes(#[error(source)] ResolveLabelsErr),
     #[error(display = "Problem with capstone disassembly")]
     Capstone(#[error(source)] capstone::Error),
 }
@@ -54,6 +55,8 @@ pub struct Pass1 {
 pub struct BlockInsn {
     pub instructions: Vec<Instruction>,
     pub name: BlockName,
+    /// Sections that are loaded from ROM (.text and .data) for this block
+    pub loaded_sections: BlockLoadedSections,
     /// Labels that could be in multiple other blocks
     pub unresolved_labels: Option<HashMap<u32, Label>>,
     /// Map of address to where the label for the address is
@@ -70,6 +73,7 @@ impl From<ResolvedBlock<'_>> for BlockInsn {
         Self {
             instructions: src.instructions,
             name,
+            loaded_sections: src.loaded_sections,
             unresolved_labels,
             label_locations: src.label_loc_cache,
         }
@@ -79,11 +83,11 @@ impl From<ResolvedBlock<'_>> for BlockInsn {
 pub fn pass1(config: Config, rom: &[u8]) -> P1Result<Pass1> {
     let Config {
         memory: memory_map,
-        labels: mut config_labels,
+        labels: mut existing_labels,
     } = config;
 
     let read_rom = |block| read_codeblock(block, &rom);
-    let proc_insns = |res| process_block(res, &config_labels);
+    let proc_insns = |res| process_block(res, &existing_labels);
 
     let labeled_blocks = memory_map
         .blocks
@@ -92,13 +96,13 @@ pub fn pass1(config: Config, rom: &[u8]) -> P1Result<Pass1> {
         .map(proc_insns)
         .collect::<P1Result<Vec<_>>>()?;
 
-    let (resolved, not_found_labels) =
-        resolvelabels::resolve(&mut config_labels, &memory_map, labeled_blocks);
-    let blocks = resolved.into_iter().map(BlockInsn::from).collect();
+    let (checked_blocks, not_found_labels) =
+        resolvelabels::resolve(&mut existing_labels, &memory_map, labeled_blocks)?;
+    let blocks = checked_blocks.into_iter().map(BlockInsn::from).collect();
 
     let pass1 = Pass1 {
         memory_map,
-        labels: config_labels,
+        labels: existing_labels,
         blocks,
         not_found_labels,
     };
@@ -140,31 +144,33 @@ fn process_block<'b>(
 
     let FoldInsnState {
         instructions,
-        label_state,
+        mut label_state,
         section_state,
         ..
     } = processed;
 
+    let loaded_sections = section_state.finish(&instructions);
+    label_state.ensure_internal_label_section(&loaded_sections);
+
+    // TODO: check data for labels (pointers? jump tables? strings?)
+
     let LabelState {
         internals: internal_labels,
         externals: external_labels,
-        config_labels,
+        existing_labels,
         ..
     } = label_state;
 
-    let sections = section_state.finish(&instructions);
-
     println!("Found sections in {}", &block.name);
-    for section in sections {
-        println!("{:2}{:x?}", "", &section);
-    }
+    println!("{:2}{:x?}", "", &loaded_sections);
 
     Ok(LabeledBlock {
         instructions,
         info: block,
+        loaded_sections,
         internal_labels,
         external_labels,
-        config_labels,
+        existing_labels,
     })
 }
 
