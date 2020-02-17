@@ -70,6 +70,20 @@ impl BlockLoadedSections {
             .ok()
             .map(|i| &self.0[i])
     }
+    /// Create a tupple of new `BlockLoadedSections`, one for .text and the other for .data.
+    /// (.text, .data)
+    pub fn clone_into_separate(&self) -> (Self, Self) {
+        let (text, data): (Vec<_>, Vec<_>) = self
+            .0
+            .iter()
+            .cloned()
+            .partition(|s| s.kind == Section::Text);
+        (text.into(), data.into())
+    }
+
+    pub fn as_slice(&self) -> &[LoadSectionInfo] {
+        &self.0
+    }
 }
 
 impl From<Vec<LoadSectionInfo>> for BlockLoadedSections {

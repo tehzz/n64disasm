@@ -60,7 +60,7 @@ impl<'c> LabelState<'c> {
         match insn.jump {
             Branch(addr) | BAL(addr) | BranchCmp(addr) => self.insert_local(addr),
             Jump(addr) | JAL(addr) => self.insert_subroutine(addr),
-            JumpRegister(..) | None => (),
+            JumpRegister(..) | NoJump => (),
         };
         //TODO: early return?
         match insn.linked {

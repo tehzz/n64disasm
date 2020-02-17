@@ -353,18 +353,8 @@ fn pass1_external_labels<'a>(
             }
         }
 
-        let unres = proc_block
-            .unresolved
-            .multiple
-            .as_ref()
-            .map(Vec::len)
-            .unwrap_or(0);
-        let notfound = proc_block
-            .unresolved
-            .not_found
-            .as_ref()
-            .map(Vec::len)
-            .unwrap_or(0);
+        let unres = proc_block.unresolved.multiple.as_ref().map_or(0, Vec::len);
+        let notfound = proc_block.unresolved.not_found.as_ref().map_or(0, Vec::len);
 
         info!(
             "{:4}Ended with {} unresovled labels and {} not found labels",

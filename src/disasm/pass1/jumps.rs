@@ -7,7 +7,7 @@ use capstone::{
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum JumpKind {
-    None,
+    NoJump,
     Branch(u32),
     BranchCmp(u32),
     BAL(u32),
@@ -43,7 +43,7 @@ impl From<(&Insn<'_>, &InsnDetail<'_>)> for JumpKind {
             && insn.id().0 != INS_J
             && insn.id().0 != INS_BAL
         {
-            return Self::None;
+            return Self::NoJump;
         }
 
         let imm = details

@@ -1,9 +1,10 @@
 use crate::disasm::{
     instruction::Instruction,
     labels::{Label, LabelKind, LabelLoc},
-    pass1::{BlockInsn, FileBreak, JumpKind, LabelPlace, Link, LinkedVal},
+    pass1::{BlockLoadedSections, LoadSectionInfo, BlockInsn, FileBreak, JumpKind, LabelPlace, Link, LinkedVal},
     pass2::{Memory, Wtr},
 };
+use crate::boolext::BoolOptionExt;
 use err_derive::Error;
 use std::io::{self, Write};
 
@@ -30,6 +31,7 @@ const ASM_FILE_PRELUDE: &'static str = include_str!("inc/prelude.text.s");
 pub(super) fn write_block_asm(
     wtr: &mut Wtr,
     block: &BlockInsn,
+    text_sections: &BlockLoadedSections,
     mem: &Memory,
 ) -> Result<(), AsmWriteError> {
     use AsmWriteError::*;
@@ -47,10 +49,29 @@ pub(super) fn write_block_asm(
     };
 
     wtr.write_all(ASM_FILE_PRELUDE.as_bytes())?;
+    writeln!(wtr, "# Text Sections")?;
+    for sec in text_sections.as_slice() {
+        writeln!(wtr, "#  {:#08X} -> {:#08X}", sec.range.start, sec.range.end)?;
+    }
+    writeln!(wtr, "")?;
+
+    let mut cur_section: Option<&LoadSectionInfo> = None;
+    let mut hidden;
     for insn in &block.instructions {
+        // check if new .text section
+        cur_section = cur_section
+            .and_then(|sec| sec.range.contains(&insn.vaddr).b_then(sec))
+            .or_else(|| text_sections.find_address(insn.vaddr));
+
+        // comment out instructions that aren't in a .text section
+        hidden = if cur_section.is_none() {
+            "#"
+        } else {
+            ""
+        };
         // typically between routines
         if insn.new_line {
-            writeln!(wtr, "")?;
+            writeln!(wtr, "{}", hidden)?;
         }
 
         // mark if this instruction could be the start of a new file
@@ -62,6 +83,7 @@ pub(super) fn write_block_asm(
 
         // label address if necessary
         if let Some(label) = internal_labels.get(&insn.vaddr) {
+            write!(wtr, "{}", hidden)?;
             match label.kind {
                 Local => writeln!(wtr, "{:2}{}:", "", &label)?,
                 Routine | Named(..) => writeln!(wtr, "glabel {}", &label)?,
@@ -69,8 +91,8 @@ pub(super) fn write_block_asm(
             }
         }
 
-        // TODO: what causes 800a26d8 to be entered as a data label, and not a routine?
         // `/* vaddr raw */ instruction {ops | jump target | linked value}`
+        write!(wtr, "{}", hidden)?;
         write!(wtr, "{:2}/* {:08X} {:08X} */", "", insn.vaddr, insn.raw)?;
         // pad to 10 chars for `trunc.x.y` instruction
         write!(wtr, "{:>10} ", &insn.mnemonic)?;
@@ -91,7 +113,7 @@ pub(super) fn write_block_asm(
                 write_jump_target(wtr, block, mem, addr)?;
             }
             (_, Empty, Some(op)) => write!(wtr, "{}", op)?,
-            (None, _, _) => write_linked_insn(wtr, block, mem, insn)?,
+            (NoJump, _, _) => write_linked_insn(wtr, block, mem, insn)?,
             _ => Err(InsnLabel(insn.clone()))?,
         }
 
@@ -197,31 +219,27 @@ fn write_jump_target(
     let target = find_label(mem, block, addr)
         .ok_or_else(|| JumpNotFound(addr, block.label_locations.get(&addr).cloned()))?;
 
-    let mut comma = false;
+    let mut comma = "";
     match target.location {
         Global | Overlayed(..) => write!(wtr, "{}", target).map_err(Into::into),
         Multiple(ref blocks) => {
             write!(wtr, "{} # possible labels: ", target)?;
-
-            #[cfg_attr(rustfmt, rustfmt_skip)]
             blocks
                 .iter()
                 .filter_map(find_ovl_labels)
-                .try_for_each(|l| {
-                    write!(wtr, "{}{}", if comma {", "} else {comma = true; ""}, l)
+                .try_for_each(|label| {
+                    write!(wtr, "{}{}", comma, label)
+                        .map(|_| comma = ", ")
+                        .map_err(Into::into)
                 })
-                .map_err(Into::into)
         }
         UnresolvedMultiple(ref blocks) => {
             write!(wtr, "{} # located somewhere in: ", target)?;
-
-            #[cfg_attr(rustfmt, rustfmt_skip)]
-            blocks
-                .iter()
-                .try_for_each(|ovl| {
-                    write!(wtr, "{}{}", if comma {", "} else {comma = true; ""}, ovl)
-                })
-                .map_err(Into::into)
+            blocks.iter().try_for_each(|ovl| {
+                write!(wtr, "{}{}", comma, ovl)
+                    .map(|_| comma = ", ")
+                    .map_err(Into::into)
+            })
         }
         NotFound => write!(wtr, "{} # couldn't be resolved", target).map_err(Into::into),
         Unspecified => Err(UnspecifiedLabel(addr, target.clone())),
