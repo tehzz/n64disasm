@@ -29,7 +29,7 @@ use std::ops::Range;
 #[derive(Debug)]
 pub struct BlockLoadedSections(Box<[LoadSectionInfo]>);
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct LoadSectionInfo {
     pub kind: Section,
     pub range: Range<u32>,

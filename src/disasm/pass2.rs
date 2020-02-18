@@ -1,4 +1,5 @@
 mod bss;
+mod data;
 mod text;
 
 use crate::disasm::{
@@ -67,7 +68,7 @@ pub fn pass2(p1result: Pass1, out: &Path) -> P2Result<()> {
 
     blocks
         .into_par_iter()
-        .take(10)
+        .take(20)
         .try_for_each(|block| write_block(block, &info, &out))?;
 
     todo!()

@@ -1,10 +1,13 @@
+use crate::boolext::BoolOptionExt;
 use crate::disasm::{
     instruction::Instruction,
     labels::{Label, LabelKind, LabelLoc},
-    pass1::{BlockLoadedSections, LoadSectionInfo, BlockInsn, FileBreak, JumpKind, LabelPlace, Link, LinkedVal},
+    pass1::{
+        BlockInsn, BlockLoadedSections, FileBreak, JumpKind, LabelPlace, Link, LinkedVal,
+        LoadSectionInfo,
+    },
     pass2::{Memory, Wtr},
 };
-use crate::boolext::BoolOptionExt;
 use err_derive::Error;
 use std::io::{self, Write};
 
@@ -64,11 +67,7 @@ pub(super) fn write_block_asm(
             .or_else(|| text_sections.find_address(insn.vaddr));
 
         // comment out instructions that aren't in a .text section
-        hidden = if cur_section.is_none() {
-            "#"
-        } else {
-            ""
-        };
+        hidden = if cur_section.is_none() { "#" } else { "" };
         // typically between routines
         if insn.new_line {
             writeln!(wtr, "{}", hidden)?;
@@ -177,7 +176,7 @@ fn write_linked_insn(
         FloatLoad(l) => write!(
             wtr,
             "{} # moved float {} to cop1",
-            op,
+            full_op,
             f32::from_bits(l.value)
         )?,
         Empty => unreachable!(),
