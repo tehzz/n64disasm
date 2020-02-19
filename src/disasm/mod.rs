@@ -56,7 +56,7 @@ pub fn disasm_all(config: Config, opts: Opts) -> Result<(), DisasmError> {
 
     fs::create_dir_all(&outdir).map_err(E::OutDir)?;
 
-    pass2(pass1, &outdir)?;
+    pass2(pass1, &rom, &outdir)?;
 
     Ok(())
 }

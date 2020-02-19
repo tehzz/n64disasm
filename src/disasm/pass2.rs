@@ -16,6 +16,7 @@ use std::fs::{self, File};
 use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
+use data::DataWriteErr;
 use text::AsmWriteError;
 
 #[derive(Debug, Error)]
@@ -32,6 +33,8 @@ pub enum Pass2Error {
     NoBlockInfo(BlockName),
     #[error(display = "Unable to disassemble asm for {}", _0)]
     AsmError(BlockName, #[error(source)] AsmWriteError),
+    #[error(display = "Unable to output data for {}", _0)]
+    DataError(BlockName, #[error(source)] DataWriteErr),
 }
 
 type P2Result<T> = Result<T, Pass2Error>;
@@ -45,7 +48,7 @@ struct Memory {
     not_found_labels: HashMap<u32, Label>,
 }
 
-pub fn pass2(p1result: Pass1, out: &Path) -> P2Result<()> {
+pub fn pass2(p1result: Pass1, rom: &[u8], out: &Path) -> P2Result<()> {
     use Pass2Error as E;
 
     let Pass1 {
@@ -70,7 +73,7 @@ pub fn pass2(p1result: Pass1, out: &Path) -> P2Result<()> {
     blocks
         .into_par_iter()
         .take(20)
-        .try_for_each(|block| write_block(block, &info, &out))?;
+        .try_for_each(|block| write_block(block, &info, &rom, &out))?;
 
     todo!()
 }
@@ -86,7 +89,7 @@ fn write_notfound_symbols(p: &Path, syms: &HashMap<u32, Label>) -> io::Result<()
     Ok(())
 }
 
-fn write_block(block: BlockInsn, info: &Memory, out: &Path) -> P2Result<()> {
+fn write_block(block: BlockInsn, info: &Memory, rom: &[u8], out: &Path) -> P2Result<()> {
     use Pass2Error as E;
 
     let name = &block.name;
@@ -97,6 +100,10 @@ fn write_block(block: BlockInsn, info: &Memory, out: &Path) -> P2Result<()> {
         .get_block(name)
         .ok_or_else(|| E::NoBlockInfo(name.clone()))?;
     let block_labels = info.label_set.get_block_map(name);
+    let raw_data = {
+        let (start, end) = block_info.range.get_rom_offsets();
+        &rom[start..end]
+    };
 
     let (text_sections, data_sections) = block.loaded_sections.clone_into_separate();
     let (data_labels, bss_labels) = separate_and_sort_labels(block_info, block_labels);
@@ -104,9 +111,22 @@ fn write_block(block: BlockInsn, info: &Memory, out: &Path) -> P2Result<()> {
     let out_base = block_output_dir(out, name_str);
     fs::create_dir_all(&out_base).map_err(|e| E::BlockOut(name.clone(), e))?;
 
+    let raw_bin = make_path(&out_base, &name_os, ".raw.bin");
+    fs::write(&raw_bin, raw_data)?;
+
     let mut asm_file = make_file(&out_base, &name_os, ".text.s")?;
     text::write_block_asm(&mut asm_file, &block, &text_sections, &info)
         .map_err(|e| E::AsmError(name.clone(), e))?;
+
+    let mut data_file = make_file(&out_base, &name_os, ".data.s")?;
+    data::write_block_data(
+        &mut data_file,
+        &raw_bin,
+        &data_labels,
+        &data_sections,
+        block_info,
+    )
+    .map_err(|e| E::DataError(name.clone(), e))?;
 
     let mut bss_file = make_file(&out_base, &name_os, ".bss.s")?;
     bss::write_block_bss(&mut bss_file, &bss_labels, block_info)?;
@@ -119,10 +139,15 @@ fn block_output_dir(base: &Path, block: &str) -> PathBuf {
 }
 
 fn make_file(dir: &Path, base: &OsStr, ending: &str) -> io::Result<Wtr> {
-    let mut f = base.to_os_string();
-    f.push(ending);
+    let path = make_path(dir, base, ending);
 
-    File::create(dir.join(&f)).map(BufWriter::new)
+    File::create(path).map(BufWriter::new)
+}
+
+fn make_path(dir: &Path, base: &OsStr, ending: &str) -> PathBuf {
+    let mut p = base.to_os_string();
+    p.push(ending);
+    dir.join(&p)
 }
 
 /// Separate a block's non-text labels into a sorted .data Vec and a sorted .bss Vec
@@ -137,6 +162,7 @@ fn separate_and_sort_labels<'a>(
     let (mut bss, mut data): (Vec<_>, Vec<_>) = block_labels
         .values()
         .filter(|l| l.is_data())
+        .filter(|l| block.range.contains(l.addr))
         .partition(|l| {
             block
                 .range

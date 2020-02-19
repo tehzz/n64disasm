@@ -14,7 +14,7 @@ pub enum DataWriteErr {
     BadSize(u32, u32),
     #[error(display = "Label @ {:08X} ended after section @ {:08X}", _0, _1)]
     BadEnd(u32, u32),
-    #[error(display = "Final label was not in data section: {:?}", _0)]
+    #[error(display = "Final label was not in data section: {:x?}", _0)]
     BadLast(Label),
     #[error(display = "Io issue when writing data file")]
     Io(#[error(source)] io::Error),
@@ -27,12 +27,12 @@ const DATA_FILE_PRELUDE: &'static str = include_str!("inc/prelude.data.s");
 pub(crate) fn write_block_data(
     f: &mut Wtr,
     raw_bin: &Path,
-    labels: &[Label],
-    sections: BlockLoadedSections,
+    labels: &[&Label],
+    sections: &BlockLoadedSections,
     block: &CodeBlock,
 ) -> DResult<()> {
     use DataWriteErr::BadLast;
-    let offset = block.range.get_text_vaddr() - block.range.get_rom_offsets().0 as u32;
+    let offset = block.range.get_text_vaddr() as u32;
     let raw_bin = raw_bin.display();
 
     f.write_all(DATA_FILE_PRELUDE.as_bytes())?;
@@ -45,13 +45,14 @@ pub(crate) fn write_block_data(
 
     labels
         .iter()
+        .cloned()
         .filter_map(|label| sections.find_address(label.addr).map(|sec| (label, sec)))
         .scan(LabelWindow::Start, window_labels)
         .filter_map(size_labels)
         .try_for_each(|res| write_data_label(f, offset, &raw_bin, res))?;
 
     // write final label
-    if let Some(last) = labels.last() {
+    if let Some(&last) = labels.last() {
         let sec = sections
             .find_address(last.addr)
             .ok_or_else(|| BadLast(last.clone()))?;
