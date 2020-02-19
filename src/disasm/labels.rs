@@ -83,6 +83,14 @@ impl Label {
         }
     }
 
+    pub fn is_data(&self) -> bool {
+        use LabelKind::*;
+        match self.kind {
+            Data => true,
+            Local | Routine | Named(..) => false,
+        }
+    }
+
     pub fn local(addr: u32, ovl: Option<&BlockName>) -> Self {
         Self {
             addr,

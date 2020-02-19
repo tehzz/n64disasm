@@ -104,6 +104,7 @@ fn write_data_label(
 ) -> DResult<()> {
     let (label, size) = res?;
     let bin_addr = label.addr - offset;
+
     writeln!(f, "glabel {}", label)?;
     writeln!(
         f,
@@ -127,7 +128,7 @@ enum LabelPair<'a> {
     EndSec(&'a Label, u32),
 }
 
-fn label_size_diff(earlier: &Label, later: &Label) -> Result<u32, DataWriteErr> {
+fn label_size_diff(earlier: &Label, later: &Label) -> DResult<u32> {
     use DataWriteErr::BadSize;
 
     let size = later.addr.saturating_sub(earlier.addr);
@@ -138,7 +139,7 @@ fn label_size_diff(earlier: &Label, later: &Label) -> Result<u32, DataWriteErr> 
     }
 }
 
-fn label_end_diff(label: &Label, end: u32) -> Result<u32, DataWriteErr> {
+fn label_end_diff(label: &Label, end: u32) -> DResult<u32> {
     use DataWriteErr::BadEnd;
 
     let size = end.saturating_sub(label.addr);

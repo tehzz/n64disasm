@@ -4,11 +4,12 @@ mod text;
 
 use crate::disasm::{
     labels::{Label, LabelSet},
-    memmap::{BlockName, MemoryMap},
+    memmap::{BlockName, CodeBlock, MemoryMap, Section},
     pass1::{BlockInsn, Pass1},
 };
 use err_derive::Error;
 use rayon::prelude::*;
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::fs::{self, File};
@@ -95,7 +96,10 @@ fn write_block(block: BlockInsn, info: &Memory, out: &Path) -> P2Result<()> {
         .memory_map
         .get_block(name)
         .ok_or_else(|| E::NoBlockInfo(name.clone()))?;
+    let block_labels = info.label_set.get_block_map(name);
+
     let (text_sections, data_sections) = block.loaded_sections.clone_into_separate();
+    let (data_labels, bss_labels) = separate_and_sort_labels(block_info, block_labels);
 
     let out_base = block_output_dir(out, name_str);
     fs::create_dir_all(&out_base).map_err(|e| E::BlockOut(name.clone(), e))?;
@@ -105,11 +109,7 @@ fn write_block(block: BlockInsn, info: &Memory, out: &Path) -> P2Result<()> {
         .map_err(|e| E::AsmError(name.clone(), e))?;
 
     let mut bss_file = make_file(&out_base, &name_os, ".bss.s")?;
-    bss::write_block_bss(
-        &mut bss_file,
-        info.label_set.get_block_map(name),
-        &block_info,
-    )?;
+    bss::write_block_bss(&mut bss_file, &bss_labels, block_info)?;
 
     Ok(())
 }
@@ -123,4 +123,29 @@ fn make_file(dir: &Path, base: &OsStr, ending: &str) -> io::Result<Wtr> {
     f.push(ending);
 
     File::create(dir.join(&f)).map(BufWriter::new)
+}
+
+/// Separate a block's non-text labels into a sorted .data Vec and a sorted .bss Vec
+fn separate_and_sort_labels<'a>(
+    block: &CodeBlock,
+    block_labels: &'a HashMap<u32, Label>,
+) -> (Vec<&'a Label>, Vec<&'a Label>) {
+    fn lower_addr(a: &&Label, b: &&Label) -> Ordering {
+        a.addr.cmp(&b.addr)
+    }
+
+    let (mut bss, mut data): (Vec<_>, Vec<_>) = block_labels
+        .values()
+        .filter(|l| l.is_data())
+        .partition(|l| {
+            block
+                .range
+                .section(l.addr)
+                .map_or(false, |s| s == Section::Bss)
+        });
+
+    bss.sort_unstable_by(lower_addr);
+    data.sort_unstable_by(lower_addr);
+
+    (data, bss)
 }
