@@ -369,7 +369,7 @@ impl BlockRange {
         (self.rom_start as usize, self.rom_end as usize)
     }
 
-    pub fn get_text_vaddr(&self) -> u32 {
+    pub fn get_ram_start(&self) -> u32 {
         self.ram_start
     }
 

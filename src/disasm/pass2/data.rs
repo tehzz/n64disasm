@@ -32,7 +32,7 @@ pub(crate) fn write_block_data(
     block: &CodeBlock,
 ) -> DResult<()> {
     use DataWriteErr::BadLast;
-    let offset = block.range.get_text_vaddr() as u32;
+    let offset = block.range.get_ram_start() as u32;
     let raw_bin = raw_bin.display();
 
     f.write_all(DATA_FILE_PRELUDE.as_bytes())?;

@@ -123,7 +123,7 @@ fn process_block<'b>(
     labels: &'_ LabelSet,
 ) -> P1Result<LabeledBlock<'b>> {
     let cs = csutil::get_instance()?;
-    let block_vaddr = block.range.get_text_vaddr() as u64;
+    let block_vaddr = block.range.get_ram_start() as u64;
     let cs_instructions = cs.disasm_all(buf, block_vaddr)?;
     let num_insn = cs_instructions.len();
 

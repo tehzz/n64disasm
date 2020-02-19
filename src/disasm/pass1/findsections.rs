@@ -136,7 +136,7 @@ impl<'a> FindSectionState<'a> {
 
         match self.vaddr {
             None => {
-                let block_start = self.block.range.get_text_vaddr();
+                let block_start = self.block.range.get_ram_start();
 
                 assert!(
                     block_start <= vaddr,
@@ -183,7 +183,7 @@ impl<'a> FindSectionState<'a> {
         use Transition::*;
 
         let final_pc = self.vaddr.expect("Non-null insn address").get() + 4;
-        let block_start = self.block.range.get_text_vaddr(); // TODO: get_ram_start()
+        let block_start = self.block.range.get_ram_start(); // TODO: get_ram_start()
         let block_end = self.block.range.get_ram_end();
         let final_transition = self.final_transition(final_pc, block_end);
 
