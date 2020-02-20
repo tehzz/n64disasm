@@ -66,7 +66,9 @@ impl<'c> LabelState<'c> {
         match insn.linked {
             Pointer(Link { value, .. })
             | PtrOff(Link { value, .. }, ..)
-            | PtrEmbed(Link { value, .. }) => self.insert_data(value),
+            | PtrEmbed(Link { value, .. })
+            | FloatPtr(Link { value, .. })
+            | DoublePtr(Link { value, .. }) => self.insert_data(value),
             Empty | PtrLui(..) | Immediate(..) | ImmLui(..) | Float(..) | FloatLoad(..) => (),
         }
     }

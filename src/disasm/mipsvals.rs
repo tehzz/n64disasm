@@ -46,6 +46,9 @@ pub const INS_LWC3: u32 = MIPS_INS_LWC3 as u32;
 pub const INS_SWC1: u32 = MIPS_INS_SWC1 as u32;
 pub const INS_SWC2: u32 = MIPS_INS_SWC2 as u32;
 pub const INS_SWC3: u32 = MIPS_INS_SWC3 as u32;
+pub const INS_LDC1: u32 = MIPS_INS_LDC1 as u32;
+pub const INS_LDC2: u32 = MIPS_INS_LDC2 as u32;
+pub const INS_LDC3: u32 = MIPS_INS_LDC3 as u32;
 
 pub fn is_grp_load(id: InsnId) -> bool {
     match id.0 {

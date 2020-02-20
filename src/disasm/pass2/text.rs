@@ -162,7 +162,7 @@ fn write_linked_insn(
     match insn.linked {
         Pointer(l) => write_label(wtr, "lo", l)?,
         PtrLui(l) => write_label(wtr, "hi", l)?,
-        PtrEmbed(l) => write_embed_ptr(wtr, l, insn, &find_label)?,
+        PtrEmbed(l) | FloatPtr(l) | DoublePtr(l) => write_embed_ptr(wtr, l, insn, &find_label)?,
         PtrOff(l, o) => write_label_offset(wtr, l, o)?,
         Immediate(l) => write!(wtr, "{}, ({v:#X} & 0xFFFF) # {v}", op, v = l.value)?,
         ImmLui(l) => write!(wtr, "{}, ({v:#X} >> 16) # {v}", op, v = l.value)?,

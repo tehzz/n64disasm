@@ -48,89 +48,8 @@ pub enum LinkedVal {
     ImmLui(Link),
     Float(Link),
     FloatLoad(Link),
-}
-
-impl LinkedVal {
-    pub fn is_not_empty(&self) -> bool {
-        match self {
-            Self::Empty => false,
-            _ => true,
-        }
-    }
-    pub fn get_link(&self) -> Option<Link> {
-        match self {
-            Self::Empty => None,
-            Self::Pointer(l) => Some(*l),
-            Self::PtrLui(l) => Some(*l),
-            Self::PtrEmbed(l) => Some(*l),
-            Self::PtrOff(l, _) => Some(*l),
-            Self::Immediate(l) => Some(*l),
-            Self::ImmLui(l) => Some(*l),
-            Self::Float(l) => Some(*l),
-            Self::FloatLoad(l) => Some(*l),
-        }
-    }
-}
-
-impl ::std::iter::IntoIterator for LinkedVal {
-    type Item = Self;
-    type IntoIter = ::std::iter::Once<Self>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        std::iter::once(self)
-    }
-}
-
-impl fmt::Display for LinkedVal {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Self::Empty => write!(f, "Empty link...?"),
-            Self::Pointer(l) => write!(
-                f,
-                "Pointer to {:08x} at instruction {}",
-                l.value, l.instruction
-            ),
-            Self::PtrLui(l) => write!(
-                f,
-                "Upper load of pointer to {:08x} at instruction {}",
-                l.value, l.instruction
-            ),
-            Self::PtrEmbed(l) => write!(
-                f,
-                "Embedded lower of pointer to {:08x} at instruction {}",
-                l.value, l.instruction
-            ),
-            Self::PtrOff(l, o) => write!(
-                f,
-                "Pointer to {:08x} with offset {} at instruction {}",
-                l.value, o, l.instruction
-            ),
-            Self::Immediate(l) => write!(
-                f,
-                "Immediate value {:08x} at instruction {}",
-                l.value, l.instruction
-            ),
-            Self::ImmLui(l) => write!(
-                f,
-                "Upper load of immediate value {:08x} at instruction {}",
-                l.value, l.instruction
-            ),
-            Self::Float(l) => write!(
-                f,
-                "Float {:.5} ({:08x}) at instruction {}",
-                f32::from_bits(l.value),
-                l.value,
-                l.instruction
-            ),
-            Self::FloatLoad(l) => write!(
-                f,
-                "Use of float {:.5} ({:08x}) at instruction {}",
-                f32::from_bits(l.value),
-                l.value,
-                l.instruction
-            ),
-        }
-    }
+    FloatPtr(Link),
+    DoublePtr(Link),
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -193,19 +112,28 @@ pub fn link_instructions<'a>(
     Ok(last_insn)
 }
 
+// helper functions for combining 16-bit intermediates
+fn add_imms(u: i16, l: i16) -> u32 {
+    (((u as i32) << 16) + (l as i32)) as u32
+}
+fn or_imms(u: i16, l: i16) -> u32 {
+    ((u as u32) << 16) | (l as u16 as u32)
+}
+
+type LinksIter = Result<
+    Option<std::iter::Chain<std::iter::Once<LinkedVal>, std::iter::Once<LinkedVal>>>,
+    LinkInsnErr,
+>;
+
 // TODO: have an instruction limit (<90?) for pointers just in case
 fn generate_insn_links<'s, 'i>(
     state: &'s mut LinkState,
     insn: &'i Instruction,
     offset: usize,
-) -> Result<Option<impl Iterator<Item = LinkedVal>>, LinkInsnErr> {
+) -> LinksIter {
     use LinkInsnErr::*;
     use LinkedVal::*;
     use LuiState::*;
-
-    // helper functions for combining 16-bit intermediates
-    let add_imms = |a, b| (((a as i32) << 16) + (b as i32)) as u32;
-    let or_imms = |a, b| ((a as u32) << 16) | (b as u16 as u32);
 
     let delay = &mut state.pc_delay_slot;
     let reg_state = &mut state.registers;
@@ -321,34 +249,16 @@ fn generate_insn_links<'s, 'i>(
         // operation. If there are multiple uses of a base pointer, the full pointer
         // can be loaded into a register and then offset by the load/store.
         INS_SD | INS_SW | INS_SH | INS_SB | INS_LB | INS_LBU | INS_LH | INS_LHU | INS_LW
-        | INS_LWU | INS_LWC1 | INS_LWC2 | INS_LWC3 | INS_SWC1 | INS_SWC2 | INS_SWC3 | INS_LD
-        | INS_LDL | INS_LDR | INS_LWL | INS_LWR => {
-            let (dst, base, imm) = get_mem_offset(&insn)?;
-            let is_load_insn = is_grp_load(insn.id);
-
-            let links = reg_state.get_mut(&base).and_then(|state| match *state {
-                Upper(reg, upper, prior) => {
-                    let ptr = add_imms(upper, imm);
-
-                    *state = Loaded(reg, ptr);
-
-                    let lui = PtrLui(Link::new(ptr, prior));
-                    let mem = PtrEmbed(Link::new(ptr, offset));
-                    Some(lui.into_iter().chain(mem))
-                }
-                Loaded(_reg, ptr) => {
-                    let mem = PtrOff(Link::new(ptr, offset), imm);
-
-                    Some(mem.into_iter().chain(Empty))
-                }
-                // typical computation, probably
-                ReadInto(..) => None,
-            });
+        | INS_LWU | INS_LWC2 | INS_LWC3 | INS_SWC1 | INS_SWC2 | INS_SWC3 | INS_LD | INS_LDC2
+        | INS_LDC3 | INS_LDL | INS_LDR | INS_LWL | INS_LWR => {
+            let links = link_ptr(&insn, offset, &reg_state, PtrEmbed)?;
 
             // reset the state of the register used for the load,
             // This may change the state set above if dst == base
             // which is needed to show that this register is now dirty.
-            if is_load_insn {
+            if is_grp_load(insn.id) {
+                let (dst, _base, _imm) = get_mem_offset(insn)?;
+
                 if let Some(state) = reg_state.get_mut(&dst) {
                     *state = ReadInto(dst);
                 }
@@ -356,7 +266,12 @@ fn generate_insn_links<'s, 'i>(
 
             Ok(links)
         }
-        _ => Ok(None), // or, check if register is overwritten?
+        // Pointer to float
+        INS_LWC1 => link_ptr(&insn, offset, &reg_state, FloatPtr),
+        // Pointer to double
+        INS_LDC1 => link_ptr(&insn, offset, &reg_state, DoublePtr),
+        // ignore other instructions
+        _ => Ok(None), // or, maybe check if register is overwritten?
     }
 }
 
@@ -365,6 +280,36 @@ fn reset_temp_reg(state: &mut HashMap<RegId, LuiState>) {
     for reg in CALLER_SAVED_REGS.iter() {
         state.remove(reg);
     }
+}
+
+fn link_ptr(
+    insn: &Instruction,
+    insn_offset: usize,
+    reg_state: &HashMap<RegId, LuiState>,
+    ptr_kind: fn(Link) -> LinkedVal,
+) -> LinksIter {
+    use LinkedVal::*;
+    use LuiState::*;
+
+    let (_dst, base, disp) = get_mem_offset(insn)?;
+    let links = reg_state.get(&base).and_then(|state| match *state {
+        Upper(_reg, upper, prior) => {
+            let ptr = add_imms(upper, disp);
+
+            let lui = PtrLui(Link::new(ptr, prior));
+            let mem = ptr_kind(Link::new(ptr, insn_offset));
+
+            Some(lui.into_iter().chain(mem))
+        }
+        Loaded(_reg, ptr) => {
+            let mem = PtrOff(Link::new(ptr, insn_offset), disp);
+
+            Some(mem.into_iter().chain(Empty))
+        }
+        ReadInto(..) => None,
+    });
+
+    Ok(links)
 }
 
 /// Get the set of (rd, rs, imm) from an `Instruction`
@@ -411,4 +356,99 @@ fn get_mem_offset(insn: &Instruction) -> Result<(RegId, RegId, i16), LinkInsnErr
         .ok_or_else(|| IErr(insn.clone(), "mem info for load or store"))?;
 
     Ok((dst, base, disp))
+}
+
+impl LinkedVal {
+    pub fn is_not_empty(&self) -> bool {
+        match self {
+            Self::Empty => false,
+            _ => true,
+        }
+    }
+    pub fn get_link(&self) -> Option<Link> {
+        match self {
+            Self::Empty => None,
+            Self::Pointer(l) => Some(*l),
+            Self::PtrLui(l) => Some(*l),
+            Self::PtrEmbed(l) => Some(*l),
+            Self::PtrOff(l, _) => Some(*l),
+            Self::Immediate(l) => Some(*l),
+            Self::ImmLui(l) => Some(*l),
+            Self::Float(l) => Some(*l),
+            Self::FloatLoad(l) => Some(*l),
+            Self::FloatPtr(l) => Some(*l),
+            Self::DoublePtr(l) => Some(*l),
+        }
+    }
+}
+
+impl ::std::iter::IntoIterator for LinkedVal {
+    type Item = Self;
+    type IntoIter = ::std::iter::Once<Self>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        std::iter::once(self)
+    }
+}
+
+impl fmt::Display for LinkedVal {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::Empty => write!(f, "Empty link...?"),
+            Self::Pointer(l) => write!(
+                f,
+                "Pointer to {:08x} at instruction {}",
+                l.value, l.instruction
+            ),
+            Self::PtrLui(l) => write!(
+                f,
+                "Upper load of pointer to {:08x} at instruction {}",
+                l.value, l.instruction
+            ),
+            Self::PtrEmbed(l) => write!(
+                f,
+                "Embedded lower of pointer to {:08x} at instruction {}",
+                l.value, l.instruction
+            ),
+            Self::PtrOff(l, o) => write!(
+                f,
+                "Pointer to {:08x} with offset {} at instruction {}",
+                l.value, o, l.instruction
+            ),
+            Self::Immediate(l) => write!(
+                f,
+                "Immediate value {:08x} at instruction {}",
+                l.value, l.instruction
+            ),
+            Self::ImmLui(l) => write!(
+                f,
+                "Upper load of immediate value {:08x} at instruction {}",
+                l.value, l.instruction
+            ),
+            Self::Float(l) => write!(
+                f,
+                "Float {:.5} ({:08x}) at instruction {}",
+                f32::from_bits(l.value),
+                l.value,
+                l.instruction
+            ),
+            Self::FloatLoad(l) => write!(
+                f,
+                "Use of float {:.5} ({:08x}) at instruction {}",
+                f32::from_bits(l.value),
+                l.value,
+                l.instruction
+            ),
+            Self::FloatPtr(l) => write!(
+                f,
+                "Pointer {:08x} to float at instruction {}",
+                l.value, l.instruction
+            ),
+            Self::DoublePtr(l) => write!(
+                f,
+                "Pointer {:08x} to double at instruction {}",
+                l.value, l.instruction
+            ),
+        }
+    }
 }
