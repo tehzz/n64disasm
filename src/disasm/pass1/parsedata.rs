@@ -244,33 +244,37 @@ impl<'a, 'rom> FindDataIter<'a, 'rom> {
     }
 
     fn parse_ascii(&mut self, start_offset: u32) -> Event {
-        const NB: u8 = '\0' as u8;
+        const NUL: u8 = b'\0';
 
         let str_buffer = self.offset_to_slice(start_offset);
         let size = str_buffer
             .iter()
             .copied()
-            .take_while(|b| b.is_ascii() && *b != NB)
+            .take_while(|&b| valid_ascii(b))
             .count();
 
         if size == 0 {
-            //println!("{:4}Found size zero str at {:x}", "", start_offset);
             return Event::Nothing;
         }
-        //println!("{:6} possible str: {:x?} + {:?}", "",&str_buffer[..size+1], str_buffer.get(size));
         // check that the final byte was the nul terminator
         match str_buffer.get(size).copied() {
-            Some(b) if b == NB => (),
+            Some(b) if b == NUL => (),
             None => return Event::Nothing,
             Some(_) => return Event::Nothing,
         };
-        // TODO! check that all bytes up to the next word alignment are null
+        // check that all bytes up to the next word alignment are NUL
+        // as IDO aligns string rodata to the nearest word with pad NUL bytes
+        let is_aligned_null = str_buffer
+            .get(size..align4(size))
+            .map_or(true, |s| s.iter().all(|b| *b == NUL));
+        if !is_aligned_null {
+            return Event::Nothing;
+        }
 
         let possible_str = &str_buffer[..size];
         let ascii_str = std::str::from_utf8(possible_str).expect("valid ascii str");
 
         let str_end_ram = start_offset + (size as u32) + 1;
-        //println!("{:4}string {:x} -> {:x}", "", start_offset, str_end_ram);
         let entry = DataEntry::asciiz(start_offset, ascii_str);
 
         self.yielded = Some(entry);
@@ -387,5 +391,36 @@ impl<'rom> fmt::Display for DataEntry<'rom> {
             JmpTbl(ref t) => write!(f, "{:X?}", t),
             Ptr(p) => write!(f, "{:X?}", p),
         }
+    }
+}
+
+// check if byte is ascii alphanumeric, symbol, or whitespace
+fn valid_ascii(b: u8) -> bool {
+    b.is_ascii() && (b.is_ascii_whitespace() || !b.is_ascii_control())
+}
+
+fn align4(v: usize) -> usize {
+    (v + 3) & !3
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn check_valid_ascii() {
+        let valid = [b'a', b'Z', b'0', b'!', b'\n', b' ', b'9', b'%', b'\'', b'~'];
+        let invalid = [
+            b'\0', 0x14, 0x01, 0x02, 0x03, 0x4, 0x5, 0x6, 0x7, 0x18, 0x7F,
+        ];
+
+        assert!(
+            valid.iter().copied().all(valid_ascii),
+            "valid ascii read as invalid"
+        );
+        assert!(
+            invalid.iter().copied().all(|b| !valid_ascii(b)),
+            "invalid ascii read as valid"
+        );
     }
 }
