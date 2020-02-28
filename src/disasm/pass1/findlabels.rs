@@ -2,26 +2,31 @@ use crate::disasm::labels::{Label, LabelSet};
 use crate::disasm::memmap::{BlockName, BlockRange};
 use crate::disasm::pass1::{
     linkinsn::{Link, LinkedVal},
-    BlockLoadedSections, Instruction, JumpKind,
+    BlockLoadedSections, DataEntry, Instruction, JumpKind,
 };
 use std::collections::HashMap;
+use std::convert::TryInto;
 
 /// A collection of addresses and labels generated from parsing instructions.
 /// The labels in `internals` and `externals` are all not named, and will have
 /// auto-generated name. Named labels will come from the config, and are located
 /// in the `existing_labels` map
 #[derive(Debug)]
-pub struct LabelState<'c> {
-    name: &'c BlockName,
-    range: &'c BlockRange,
+pub struct LabelState<'a, 'rom> {
+    name: &'a BlockName,
+    range: &'a BlockRange,
+    /// slice of rom data that maps to the loaded code/data of `range`
+    rom: &'rom [u8],
     /// global scope labels in the config
-    config_global: &'c HashMap<u32, Label>,
+    config_global: &'a HashMap<u32, Label>,
     /// labels in the config for this overlay (if applicable)
-    config_ovl: Option<&'c HashMap<u32, Label>>,
+    config_ovl: Option<&'a HashMap<u32, Label>>,
     /// subroutines or data that are located in the current block
     pub internals: HashMap<u32, Label>,
     /// subroutines or data that are not in the current block
     pub externals: HashMap<u32, Label>,
+    /// interperted data from the `rom` slice
+    pub data: HashMap<u32, DataEntry<'rom>>,
     /// Addresses that have labels in the existing maps, typicall from the config.
     /// These labels will be either global or internal
     pub existing_labels: HashMap<u32, ConfigLabelLoc>,
@@ -33,17 +38,24 @@ pub enum ConfigLabelLoc {
     Global,
 }
 
-impl<'c> LabelState<'c> {
+impl<'a, 'rom> LabelState<'a, 'rom> {
     /// Set up a new labeling state based on a block's memory range and known labels
     /// passed in the from the configuration yaml file.
-    pub fn from_config(range: &'c BlockRange, set: &'c LabelSet, name: &'c BlockName) -> Self {
+    pub fn from_config(
+        range: &'a BlockRange,
+        rom: &'rom [u8],
+        set: &'a LabelSet,
+        name: &'a BlockName,
+    ) -> Self {
         Self {
             name,
             range,
+            rom,
             config_global: &set.globals,
             config_ovl: set.overlays.get(name),
             internals: HashMap::new(),
             externals: HashMap::new(),
+            data: HashMap::new(),
             existing_labels: HashMap::new(),
         }
     }
@@ -66,9 +78,9 @@ impl<'c> LabelState<'c> {
         match insn.linked {
             Pointer(Link { value, .. })
             | PtrOff(Link { value, .. }, ..)
-            | PtrEmbed(Link { value, .. })
-            | FloatPtr(Link { value, .. })
-            | DoublePtr(Link { value, .. }) => self.insert_data(value),
+            | PtrEmbed(Link { value, .. }) => self.insert_data(value),
+            FloatPtr(Link { value, .. }) => self.insert_float(value),
+            DoublePtr(Link { value, .. }) => self.insert_double(value),
             Empty | PtrLui(..) | Immediate(..) | ImmLui(..) | Float(..) | FloatLoad(..) => (),
         }
     }
@@ -111,6 +123,9 @@ impl<'c> LabelState<'c> {
     fn is_internal(&self, addr: u32) -> bool {
         self.range.contains(addr)
     }
+    fn is_interal_loaded(&self, addr: u32) -> bool {
+        self.range.load_contains(addr)
+    }
 
     fn insert_local(&mut self, addr: u32) {
         if self.addr_in_config(addr) {
@@ -123,31 +138,52 @@ impl<'c> LabelState<'c> {
         }
     }
     fn insert_subroutine(&mut self, addr: u32) {
-        if self.addr_in_config(addr) {
-            return;
-        }
-
-        if self.is_internal(addr) {
-            if !self.internals.contains_key(&addr) {
-                self.internals
-                    .insert(addr, Label::routine(addr, Some(self.name)));
-            }
-        } else if !self.externals.contains_key(&addr) {
-            self.externals.insert(addr, Label::routine(addr, None));
-        }
+        self.insert_address(addr, Label::routine);
     }
     fn insert_data(&mut self, addr: u32) {
+        self.insert_address(addr, Label::data);
+    }
+    fn insert_float(&mut self, addr: u32) {
+        self.insert_address(addr, Label::data);
+
+        if self.is_interal_loaded(addr) {
+            let idx = self.address_to_offset(addr);
+            let bytes: [u8; 4] = self.rom[idx..idx + 4].try_into().unwrap();
+            let hex = u32::from_be_bytes(bytes);
+
+            self.data.insert(addr, DataEntry::float(addr, hex));
+        }
+    }
+
+    fn insert_double(&mut self, addr: u32) {
+        self.insert_address(addr, Label::data);
+
+        if self.is_interal_loaded(addr) {
+            let idx = self.address_to_offset(addr);
+            let bytes: [u8; 8] = self.rom[idx..idx + 8].try_into().unwrap();
+            let hex = u64::from_be_bytes(bytes);
+
+            self.data.insert(addr, DataEntry::double(addr, hex));
+        }
+    }
+
+    fn insert_address(&mut self, addr: u32, label_fn: LabelInsert) {
         if self.addr_in_config(addr) {
             return;
         }
 
         if self.is_internal(addr) {
             if !self.internals.contains_key(&addr) {
-                self.internals
-                    .insert(addr, Label::data(addr, Some(self.name)));
+                self.internals.insert(addr, label_fn(addr, Some(self.name)));
             }
         } else if !self.externals.contains_key(&addr) {
-            self.externals.insert(addr, Label::data(addr, None));
+            self.externals.insert(addr, label_fn(addr, None));
         }
     }
+
+    fn address_to_offset(&self, addr: u32) -> usize {
+        (addr - self.range.get_ram_start()) as usize
+    }
 }
+
+type LabelInsert = fn(u32, Option<&BlockName>) -> Label;

@@ -3,6 +3,7 @@ mod findlabels;
 mod findsections;
 mod jumps;
 mod linkinsn;
+mod parsedata;
 mod resolvelabels;
 mod routinenl;
 
@@ -29,6 +30,7 @@ pub use findfiles::FileBreak;
 pub use findsections::{BlockLoadedSections, LoadSectionInfo};
 pub use jumps::JumpKind;
 pub use linkinsn::{Link, LinkedVal};
+pub use parsedata::DataEntry;
 pub use resolvelabels::{LabelPlace, ResolveLabelsErr, ResolvedBlock};
 
 #[derive(Debug, Error)]
@@ -118,10 +120,10 @@ fn read_codeblock<'a, 'b>(block: &'a CodeBlock, rom: &'b [u8]) -> (&'a CodeBlock
     (block, block_data)
 }
 
-fn process_block<'b>(
-    (block, buf): (&'b CodeBlock, &'_ [u8]),
+fn process_block<'a>(
+    (block, buf): (&'a CodeBlock, &'_ [u8]),
     labels: &'_ LabelSet,
-) -> P1Result<LabeledBlock<'b>> {
+) -> P1Result<LabeledBlock<'a>> {
     let cs = csutil::get_instance()?;
     let block_vaddr = block.range.get_ram_start() as u64;
     let cs_instructions = cs.disasm_all(buf, block_vaddr)?;
@@ -129,7 +131,7 @@ fn process_block<'b>(
 
     info!("Found {} instructions in block '{}'", num_insn, &block.name);
 
-    let label_state = LabelState::from_config(&block.range, &labels, &block.name);
+    let label_state = LabelState::from_config(&block.range, &buf, &labels, &block.name);
     let section_state = FindSectionState::new(&block);
     let pass1_state = FoldInsnState::new(num_insn, label_state, section_state);
 
@@ -153,13 +155,36 @@ fn process_block<'b>(
     label_state.ensure_internal_label_section(&loaded_sections);
 
     // TODO: check data for labels (pointers? jump tables? strings?)
+    for sec in loaded_sections.as_slice().iter().filter(|s| s.is_data()) {
+        let start_idx = (sec.range.start - block_vaddr as u32) as usize;
+        let end_idx = (sec.range.end - block_vaddr as u32) as usize;
+        let range = start_idx..end_idx;
+        let data_buf = &buf[range];
+        let vram_start = sec.range.start;
+        let test_data_parse =
+            parsedata::FindDataIter::new(data_buf, vram_start, &loaded_sections, false)
+                .expect("valid data section for testing");
+
+        println!("Searching for data in {}", &block.name);
+        for data in test_data_parse {
+            println!("{:2}{:x?}", "", data);
+        }
+    }
 
     let LabelState {
         internals: internal_labels,
         externals: external_labels,
         existing_labels,
+        data,
         ..
     } = label_state;
+
+    for (_addr, entry) in data {
+        println!(
+            "parsed float/double {} in {}: {:x?}",
+            &entry, &block.name, &entry
+        );
+    }
 
     println!("Found sections in {}", &block.name);
     println!("{:2}{:x?}", "", &loaded_sections);
@@ -175,17 +200,17 @@ fn process_block<'b>(
 }
 
 #[derive(Debug)]
-struct FoldInsnState<'c> {
+struct FoldInsnState<'a, 'rom> {
     instructions: Vec<Instruction>,
     link_state: LinkState,
-    label_state: LabelState<'c>,
-    section_state: FindSectionState<'c>,
+    label_state: LabelState<'a, 'rom>,
+    section_state: FindSectionState<'a>,
     nl_state: NLState,
     file_state: FindFileState,
 }
 
-impl<'c> FoldInsnState<'c> {
-    fn new(insn_size: usize, labels: LabelState<'c>, sections: FindSectionState<'c>) -> Self {
+impl<'a, 'rom> FoldInsnState<'a, 'rom> {
+    fn new(insn_size: usize, labels: LabelState<'a, 'rom>, sections: FindSectionState<'a>) -> Self {
         Self {
             instructions: Vec::with_capacity(insn_size),
             link_state: LinkState::new(),
@@ -197,10 +222,10 @@ impl<'c> FoldInsnState<'c> {
     }
 }
 
-fn fold_instructions(
-    mut state: FoldInsnState,
+fn fold_instructions<'a, 'rom>(
+    mut state: FoldInsnState<'a, 'rom>,
     (offset, insn): (usize, Result<Instruction, InsnParseErr>),
-) -> P1Result<FoldInsnState> {
+) -> P1Result<FoldInsnState<'a, 'rom>> {
     let mut insn = insn?;
     csutil::correct_insn(&mut insn);
     state.nl_state.newline_between_routines(&mut insn);

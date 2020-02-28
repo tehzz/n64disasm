@@ -93,6 +93,13 @@ impl From<Vec<LoadSectionInfo>> for BlockLoadedSections {
 }
 
 impl LoadSectionInfo {
+    pub fn is_data(&self) -> bool {
+        match self.kind {
+            Section::Data => true,
+            _ => false,
+        }
+    }
+
     fn find_addr(&self, addr: u32) -> Ordering {
         if self.range.contains(&addr) {
             Ordering::Equal
@@ -102,7 +109,6 @@ impl LoadSectionInfo {
             Ordering::Less
         }
     }
-
     fn data(range: Range<u32>) -> Self {
         Self {
             kind: Section::Data,

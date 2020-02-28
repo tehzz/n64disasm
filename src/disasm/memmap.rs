@@ -380,6 +380,10 @@ impl BlockRange {
     pub fn contains(&self, addr: u32) -> bool {
         self.section(addr).is_some()
     }
+    /// `addr` is in a load (.text or .data) section (not .bss)
+    pub fn load_contains(&self, addr: u32) -> bool {
+        self.section(addr).map_or(false, |s| s == Section::TextData)
+    }
 
     pub fn get_bss(&self) -> Option<(u32, u32)> {
         self.bss_start

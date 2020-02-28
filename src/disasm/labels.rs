@@ -1,6 +1,7 @@
 use crate::config::RawLabel;
 use crate::disasm::memmap::{BlockName, Section};
 use err_derive::Error;
+use log::debug;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 
@@ -119,11 +120,11 @@ impl Label {
     pub fn update_kind(&mut self, section: Section) {
         match (section, &self.kind) {
             (Section::Data, LabelKind::Routine) => {
-                println!("{:4}Update label kind to Data: {:x?}", "", &self);
+                debug!("{:4}Update label kind to Data: {:x?}", "", &self);
                 self.kind = LabelKind::Data;
             }
             (Section::Text, LabelKind::Data) => {
-                println!("{:4}Update label kind to Text: {:x?}", "", &self);
+                debug!("{:4}Update label kind to Text: {:x?}", "", &self);
                 self.kind = LabelKind::Routine;
             }
             // (Section::Data, LabelKind::Local) => Probably a branch target of a data word
