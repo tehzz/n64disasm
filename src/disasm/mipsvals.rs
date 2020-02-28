@@ -59,6 +59,7 @@ pub fn is_grp_load(id: InsnId) -> bool {
 }
 
 // Callee Saved Registers
+#[allow(dead_code)]
 pub const CALLEE_SAVED_REGS: [RegId; 10] = [
     RegId(MIPS_REG_GP as u16),
     RegId(MIPS_REG_S0 as u16),

@@ -40,12 +40,12 @@ pub struct FindDataIter<'a, 'rom> {
     at: u32,            // ram address of start of csr
     vram: Range<u32>,
     sections: &'a BlockLoadedSections,
-    yielded: Option<DataEntry<'rom>>,
+    yielded: Option<DpResult<DataEntry<'rom>>>,
     state: State,
 }
 
 impl<'a, 'rom> Iterator for FindDataIter<'a, 'rom> {
-    type Item = DataEntry<'rom>;
+    type Item = DpResult<DataEntry<'rom>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         while !self.is_finished() {
@@ -73,7 +73,7 @@ enum State {
     EndJmpTblAndAscii((u32, Option<Vec<u32>>), u32),
     ParseAscii(u32), //start offset
     PtrThenAscii((u32, u32), u32),
-    Failure, // TODO: put error in here
+    Failure(String),
     Finished,
 }
 
@@ -141,7 +141,8 @@ impl State {
             (_, Nothing) => Checking,
 
             // Error
-            (s, e) => Failure,
+            (Failure(ref s), Issue) => Failure(s.clone()),
+            (s, e) => Failure(format!("{:x?} with {:x?}", s, e)),
         }
     }
 }
@@ -193,14 +194,14 @@ impl<'a, 'rom> FindDataIter<'a, 'rom> {
             Checking => self.check_next_word(),
             AddPtr(addr, ptr) => {
                 let entry = DataEntry::ptr(addr, ptr);
-                self.yielded = Some(entry);
+                self.yielded = Some(Ok(entry));
 
                 YieldData
             }
             AddTwoPtr(ptrs) => {
                 let [p1, p2] = ptrs;
                 let entry1 = DataEntry::tupple_ptr(&p1);
-                self.yielded = Some(entry1);
+                self.yielded = Some(Ok(entry1));
 
                 BufferedPtr(p2.0, p2.1)
             }
@@ -209,14 +210,14 @@ impl<'a, 'rom> FindDataIter<'a, 'rom> {
             EndJmpTbl(addr, ref mut tbl) => {
                 let tbl = tbl.take().unwrap();
                 let tbl = DataEntry::jmp_tbl(addr, tbl);
-                self.yielded = Some(tbl);
+                self.yielded = Some(Ok(tbl));
 
                 YieldData
             }
             EndJmpTblAndPtr((offset, ref mut tbl), (off2, ptr2)) => {
                 let tbl = tbl.take().unwrap();
                 let tbl = DataEntry::jmp_tbl(offset, tbl);
-                self.yielded = Some(tbl);
+                self.yielded = Some(Ok(tbl));
 
                 BufferedPtr(off2, ptr2)
             }
@@ -224,21 +225,26 @@ impl<'a, 'rom> FindDataIter<'a, 'rom> {
             EndJmpTblAndAscii((offset, ref mut tbl), ascii_off) => {
                 let tbl = tbl.take().unwrap();
                 let tbl = DataEntry::jmp_tbl(offset, tbl);
-                self.yielded = Some(tbl);
+                self.yielded = Some(Ok(tbl));
 
                 BufferedAscii(ascii_off)
             }
 
             PtrThenAscii(ptr, ascii_off) => {
                 let entry = DataEntry::tupple_ptr(&ptr);
-                self.yielded = Some(entry);
+                self.yielded = Some(Ok(entry));
 
                 BufferedAscii(ascii_off)
             }
 
             ParseAscii(offset) => self.parse_ascii(offset),
 
-            Failure => todo!(),
+            Failure(ref s) => {
+                let problem = DataParseErr::SmFail(self.at, s.clone());
+                self.yielded = Some(Err(problem));
+
+                Issue
+            }
             Finished => Nothing,
         }
     }
@@ -277,7 +283,7 @@ impl<'a, 'rom> FindDataIter<'a, 'rom> {
         let str_end_ram = start_offset + (size as u32) + 1;
         let entry = DataEntry::asciiz(start_offset, ascii_str);
 
-        self.yielded = Some(entry);
+        self.yielded = Some(Ok(entry));
 
         if self.advance_and_word_align(str_end_ram) {
             Event::YieldData
