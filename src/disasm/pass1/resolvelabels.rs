@@ -21,7 +21,7 @@ use crate::disasm::{
     instruction::Instruction,
     labels::{Label, LabelSet},
     memmap::{AddrLocation, BlockName, CodeBlock, MemoryMap},
-    pass1::{findlabels::ConfigLabelLoc, BlockLoadedSections},
+    pass1::{findlabels::ConfigLabelLoc, BlockLoadedSections, DataEntry},
 };
 use err_derive::Error;
 use log::{debug, info};
@@ -34,41 +34,22 @@ pub enum ResolveLabelsErr {
 }
 
 #[derive(Debug)]
-pub struct ResolvedBlock<'c> {
+pub struct ResolvedBlock<'c, 'r> {
     pub instructions: Vec<Instruction>,
+    pub parsed_data: HashMap<u32, DataEntry<'r>>,
     pub label_loc_cache: HashMap<u32, LabelPlace>,
     pub multi_block_labels: Option<Vec<Label>>,
     pub info: &'c CodeBlock,
     pub loaded_sections: BlockLoadedSections,
 }
 
-impl<'c> ResolvedBlock<'c> {
-    fn from_processed(
-        block: ProcessedBlock<'c>,
-        loaded_sections: BlockLoadedSections,
-    ) -> (Self, Option<Vec<Label>>) {
-        let (multi_block_labels, not_found) = block.unresolved.into_components();
-
-        (
-            Self {
-                instructions: block.instructions,
-                label_loc_cache: block.label_loc_cache,
-                multi_block_labels,
-                info: block.info,
-                loaded_sections,
-            },
-            not_found,
-        )
-    }
-}
-
 pub type NotFoundLabels = HashMap<u32, Label>;
 
-pub fn resolve<'c>(
+pub fn resolve<'c, 'r>(
     label_set: &mut LabelSet,
     memory_map: &MemoryMap,
-    blocks: Vec<LabeledBlock<'c>>,
-) -> Result<(Vec<ResolvedBlock<'c>>, NotFoundLabels), ResolveLabelsErr> {
+    blocks: Vec<LabeledBlock<'c, 'r>>,
+) -> Result<(Vec<ResolvedBlock<'c, 'r>>, NotFoundLabels), ResolveLabelsErr> {
     use ResolveLabelsErr::*;
 
     let n = blocks.len();
@@ -121,27 +102,53 @@ impl From<ConfigLabelLoc> for LabelPlace {
     }
 }
 
-pub struct LabeledBlock<'c> {
+pub struct LabeledBlock<'c, 'r> {
     pub instructions: Vec<Instruction>,
     pub info: &'c CodeBlock,
     pub loaded_sections: BlockLoadedSections,
+    pub parsed_data: HashMap<u32, DataEntry<'r>>,
     pub internal_labels: HashMap<u32, Label>,
     pub external_labels: HashMap<u32, Label>,
     pub existing_labels: HashMap<u32, ConfigLabelLoc>,
 }
 
-type LabeledBlockComponents<'a> = (
-    ExternLabeledBlock<'a>,
+struct ExternLabeledBlock<'c, 'r> {
+    instructions: Vec<Instruction>,
+    info: &'c CodeBlock,
+    parsed_data: HashMap<u32, DataEntry<'r>>,
+    label_loc_cache: HashMap<u32, LabelPlace>,
+    external_labels: HashMap<u32, Label>,
+}
+
+struct ProcessedBlock<'c, 'r> {
+    instructions: Vec<Instruction>,
+    info: &'c CodeBlock,
+    parsed_data: HashMap<u32, DataEntry<'r>>,
+    label_loc_cache: HashMap<u32, LabelPlace>,
+    unresolved: UnresolvedBlockLabels,
+}
+
+/// Hold any `Label`s that couldn't be found or resolved into a single overlay.
+/// The label originates from `block`
+#[derive(Debug)]
+struct UnresolvedBlockLabels {
+    multiple: Option<Vec<Label>>,
+    not_found: Option<Vec<Label>>,
+}
+
+type LabeledBlockComponents<'a, 'r> = (
+    ExternLabeledBlock<'a, 'r>,
     BlockLoadedSections,
     HashMap<u32, Label>,
 );
 
-impl<'c> LabeledBlock<'c> {
-    fn into_extern_labeled(self) -> LabeledBlockComponents<'c> {
+impl<'c, 'r> LabeledBlock<'c, 'r> {
+    fn into_extern_labeled(self) -> LabeledBlockComponents<'c, 'r> {
         let Self {
             instructions,
             info,
             loaded_sections,
+            parsed_data,
             internal_labels,
             external_labels,
             existing_labels,
@@ -165,6 +172,7 @@ impl<'c> LabeledBlock<'c> {
             ExternLabeledBlock {
                 instructions,
                 info,
+                parsed_data,
                 external_labels,
                 label_loc_cache,
             },
@@ -174,18 +182,12 @@ impl<'c> LabeledBlock<'c> {
     }
 }
 
-struct ExternLabeledBlock<'c> {
-    instructions: Vec<Instruction>,
-    info: &'c CodeBlock,
-    label_loc_cache: HashMap<u32, LabelPlace>,
-    external_labels: HashMap<u32, Label>,
-}
-
-impl<'c> ExternLabeledBlock<'c> {
-    fn into_proc_block(self) -> (ProcessedBlock<'c>, HashMap<u32, Label>) {
+impl<'c, 'r> ExternLabeledBlock<'c, 'r> {
+    fn into_proc_block(self) -> (ProcessedBlock<'c, 'r>, HashMap<u32, Label>) {
         let Self {
             instructions,
             info,
+            parsed_data,
             external_labels,
             label_loc_cache,
         } = self;
@@ -193,27 +195,13 @@ impl<'c> ExternLabeledBlock<'c> {
             ProcessedBlock {
                 instructions,
                 info,
+                parsed_data,
                 label_loc_cache,
                 unresolved: UnresolvedBlockLabels::new(),
             },
             external_labels,
         )
     }
-}
-
-struct ProcessedBlock<'c> {
-    instructions: Vec<Instruction>,
-    info: &'c CodeBlock,
-    label_loc_cache: HashMap<u32, LabelPlace>,
-    unresolved: UnresolvedBlockLabels,
-}
-
-/// Hold any `Label`s that couldn't be found or resolved into a single overlay.
-/// The label originates from `block`
-#[derive(Debug)]
-struct UnresolvedBlockLabels {
-    multiple: Option<Vec<Label>>,
-    not_found: Option<Vec<Label>>,
 }
 
 impl<'c> UnresolvedBlockLabels {
@@ -229,16 +217,37 @@ impl<'c> UnresolvedBlockLabels {
     }
 }
 
-type BlockSections<'a> = HashMap<&'a BlockName, BlockLoadedSections>;
-type ExBlockAccum<'a> = (Vec<ExternLabeledBlock<'a>>, BlockSections<'a>);
+impl<'c, 'r> ResolvedBlock<'c, 'r> {
+    fn from_processed(
+        block: ProcessedBlock<'c, 'r>,
+        loaded_sections: BlockLoadedSections,
+    ) -> (Self, Option<Vec<Label>>) {
+        let (multi_block_labels, not_found) = block.unresolved.into_components();
 
-fn add_internal_labels_to_set<'a>(
+        (
+            Self {
+                instructions: block.instructions,
+                parsed_data: block.parsed_data,
+                label_loc_cache: block.label_loc_cache,
+                multi_block_labels,
+                info: block.info,
+                loaded_sections,
+            },
+            not_found,
+        )
+    }
+}
+
+type BlockSections<'a> = HashMap<&'a BlockName, BlockLoadedSections>;
+type ExBlockAccum<'a, 'r> = (Vec<ExternLabeledBlock<'a, 'r>>, BlockSections<'a>);
+
+fn add_internal_labels_to_set<'a, 'r>(
     label_set: &mut LabelSet,
-    blocks: Vec<LabeledBlock<'a>>,
-) -> ExBlockAccum<'a> {
+    blocks: Vec<LabeledBlock<'a, 'r>>,
+) -> ExBlockAccum<'a, 'r> {
     let fold_into_externblock =
-        |mut acc: ExBlockAccum<'a>,
-         (extrn_block, sections, internal_labels): LabeledBlockComponents<'a>| {
+        |mut acc: ExBlockAccum<'a, 'r>,
+         (extrn_block, sections, internal_labels): LabeledBlockComponents<'a, 'r>| {
             let block_name = &extrn_block.info.name;
 
             // All internal `Label`s have their block name set; this only
@@ -272,12 +281,12 @@ fn add_internal_labels_to_set<'a>(
 
 /// Attempt to resolve the location of external labels from a block of `blocks`
 /// based on the address of that label, and that block's memory map
-fn pass1_external_labels<'a>(
+fn pass1_external_labels<'a, 'r>(
     label_set: &mut LabelSet,
     memory_map: &MemoryMap,
     sections: &BlockSections<'a>,
-    blocks: Vec<ExternLabeledBlock<'a>>,
-) -> Vec<ProcessedBlock<'a>> {
+    blocks: Vec<ExternLabeledBlock<'a, 'r>>,
+) -> Vec<ProcessedBlock<'a, 'r>> {
     use AddrLocation::*;
 
     let mut output = Vec::with_capacity(blocks.len());

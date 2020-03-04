@@ -118,6 +118,9 @@ fn write_block(block: BlockInsn, info: &Memory, rom: &[u8], out: &Path) -> P2Res
     text::write_block_asm(&mut asm_file, &block, &text_sections, &info)
         .map_err(|e| E::AsmError(name.clone(), e))?;
 
+    for (_addr, entry) in &block.parsed_data {
+        println!("parsed <{}> in {}: {:x?}", &entry, name, &entry);
+    }
     let mut data_file = make_file(&out_base, &name_os, ".data.s")?;
     data::write_block_data(
         &mut data_file,
