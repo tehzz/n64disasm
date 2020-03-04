@@ -84,6 +84,10 @@ impl BlockLoadedSections {
     pub fn as_slice(&self) -> &[LoadSectionInfo] {
         &self.0
     }
+
+    pub fn iter_data(&self) -> impl Iterator<Item = &LoadSectionInfo> {
+        self.0.iter().filter(|s| s.is_data())
+    }
 }
 
 impl From<Vec<LoadSectionInfo>> for BlockLoadedSections {

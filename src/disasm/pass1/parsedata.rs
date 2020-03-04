@@ -21,15 +21,15 @@ type DpResult<T> = Result<T, DataParseErr>;
 pub enum ParsedData<'rom> {
     Float(u32),         // hex of float
     Double(u64),        // hex of double
-    Asciiz(&'rom str),  // str view of rom data; doesn't include \0
-    JmpTbl(Box<[u32]>), // entries address
+    Asciz(&'rom str),   // str view of rom data; doesn't include \0
+    JmpTbl(Box<[u32]>), // array of labels in current .text section
     Ptr(u32),           // standard pointer
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct DataEntry<'rom> {
-    addr: u32,
-    data: ParsedData<'rom>,
+    pub addr: u32,
+    pub data: ParsedData<'rom>,
 }
 
 #[derive(Debug)]
@@ -80,7 +80,7 @@ enum State {
 #[derive(Debug, Copy, Clone)]
 enum Event {
     Nothing,
-    Issue,
+    IssueReported,
     EndOfData,
     YieldData,
     FoundTextPtr(u32, u32), // offset, pointer value
@@ -141,7 +141,7 @@ impl State {
             (_, Nothing) => Checking,
 
             // Error
-            (Failure(ref s), Issue) => Failure(s.clone()),
+            (Failure(..), IssueReported) => Finished,
             (s, e) => Failure(format!("{:x?} with {:x?}", s, e)),
         }
     }
@@ -243,7 +243,7 @@ impl<'a, 'rom> FindDataIter<'a, 'rom> {
                 let problem = DataParseErr::SmFail(self.at, s.clone());
                 self.yielded = Some(Err(problem));
 
-                Issue
+                IssueReported
             }
             Finished => Nothing,
         }
@@ -369,7 +369,7 @@ impl<'rom> DataEntry<'rom> {
     fn asciiz(addr: u32, ptr: &'rom str) -> Self {
         Self {
             addr,
-            data: ParsedData::Asciiz(ptr),
+            data: ParsedData::Asciz(ptr),
         }
     }
     pub fn float(addr: u32, val: u32) -> Self {
@@ -393,7 +393,7 @@ impl<'rom> fmt::Display for DataEntry<'rom> {
         match self.data {
             Float(h) => write!(f, "{}", f32::from_bits(h)),
             Double(h) => write!(f, "{}", f64::from_bits(h)),
-            Asciiz(s) => write!(f, "{}", s),
+            Asciz(s) => write!(f, "{}", s),
             JmpTbl(ref t) => write!(f, "{:X?}", t),
             Ptr(p) => write!(f, "{:X?}", p),
         }

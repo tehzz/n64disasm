@@ -153,23 +153,7 @@ fn process_block<'a>(
 
     let loaded_sections = section_state.finish(&instructions);
     label_state.ensure_internal_label_section(&loaded_sections);
-
-    // TODO: check data for labels (pointers? jump tables? strings?)
-    for sec in loaded_sections.as_slice().iter().filter(|s| s.is_data()) {
-        let start_idx = (sec.range.start - block_vaddr as u32) as usize;
-        let end_idx = (sec.range.end - block_vaddr as u32) as usize;
-        let range = start_idx..end_idx;
-        let data_buf = &buf[range];
-        let vram_start = sec.range.start;
-        let test_data_parse =
-            parsedata::FindDataIter::new(data_buf, vram_start, &loaded_sections, false)
-                .expect("valid data section for testing");
-
-        println!("Searching for data in {}", &block.name);
-        for data in test_data_parse {
-            println!("{:2}{:x?}", "", data);
-        }
-    }
+    label_state.add_data_labels(&loaded_sections);
 
     let LabelState {
         internals: internal_labels,
@@ -180,10 +164,7 @@ fn process_block<'a>(
     } = label_state;
 
     for (_addr, entry) in data {
-        println!(
-            "parsed float/double {} in {}: {:x?}",
-            &entry, &block.name, &entry
-        );
+        println!("parsed <{}> in {}: {:x?}", &entry, &block.name, &entry);
     }
 
     println!("Found sections in {}", &block.name);

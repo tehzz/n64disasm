@@ -11,6 +11,8 @@ pub enum LabelKind {
     Local,
     // subroutine start, typically
     Routine,
+    // pointer to instructions in a jump table
+    JmpTarget,
     // a pointer to some sort of data (.data, .rodata, .bss)
     Data,
     // named label from input config file
@@ -88,7 +90,7 @@ impl Label {
         use LabelKind::*;
         match self.kind {
             Data => true,
-            Local | Routine | Named(..) => false,
+            Local | Routine | JmpTarget | Named(..) => false,
         }
     }
 
@@ -104,6 +106,14 @@ impl Label {
         Self {
             addr,
             kind: LabelKind::Routine,
+            location: ovl.into(),
+        }
+    }
+
+    pub fn jmp_target(addr: u32, ovl: Option<&BlockName>) -> Self {
+        Self {
+            addr,
+            kind: LabelKind::JmpTarget,
             location: ovl.into(),
         }
     }
@@ -162,6 +172,7 @@ impl fmt::Display for Label {
         match self.kind {
             Routine => write!(f, "func"),
             Data => write!(f, "D"),
+            JmpTarget => write!(f, "L_JMP"),
             Local => return write!(f, ".L{:08X}", self.addr),
             Named(ref name) => return f.write_str(&name),
         }?;

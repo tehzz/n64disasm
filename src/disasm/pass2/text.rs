@@ -9,7 +9,11 @@ use crate::disasm::{
     pass2::{Memory, Wtr},
 };
 use err_derive::Error;
+use std::collections::HashMap;
 use std::io::{self, Write};
+
+type AsmResult<T> = Result<T, AsmWriteError>;
+type LabelMap = HashMap<u32, Label>;
 
 #[derive(Debug, Error)]
 pub enum AsmWriteError {
@@ -36,20 +40,14 @@ pub(super) fn write_block_asm(
     block: &BlockInsn,
     text_sections: &BlockLoadedSections,
     mem: &Memory,
-) -> Result<(), AsmWriteError> {
+) -> AsmResult<()> {
     use AsmWriteError::*;
     use JumpKind::*;
     use LabelKind::*;
     use LinkedVal::*;
 
     let name = &block.name;
-
     let internal_labels = mem.label_set.get_block_map(name);
-    let find_branch = |addr| {
-        internal_labels
-            .get(&addr)
-            .ok_or_else(|| BranchNotFound(addr))
-    };
 
     wtr.write_all(ASM_FILE_PRELUDE.as_bytes())?;
     writeln!(wtr, "# Text Sections")?;
@@ -85,7 +83,7 @@ pub(super) fn write_block_asm(
             write!(wtr, "{}", hidden)?;
             match label.kind {
                 Local => writeln!(wtr, "{:2}{}:", "", &label)?,
-                Routine | Named(..) => writeln!(wtr, "glabel {}", &label)?,
+                Routine | JmpTarget | Named(..) => writeln!(wtr, "glabel {}", &label)?,
                 Data => writeln!(wtr, "glabel {}   # Routine parsed as data", &label)?,
             }
         }
@@ -97,17 +95,8 @@ pub(super) fn write_block_asm(
         write!(wtr, "{:>10} ", &insn.mnemonic)?;
 
         match (insn.jump, insn.linked, insn.op_str.as_ref()) {
-            (BAL(addr), _, _) | (Branch(addr), _, _) => {
-                let target = find_branch(addr)?;
-                write!(wtr, "{}", target)?;
-            }
-            (BranchCmp(addr), _, _) => {
-                let target = find_branch(addr)?;
-                let op = insn
-                    .truncate_op_imm()
-                    .ok_or_else(|| MissingOpString(insn.clone()))?;
-                write!(wtr, "{}, {}", op, target)?;
-            }
+            (BAL(addr), _, _) | (Branch(addr), _, _) => write_branch(wtr, &internal_labels, addr)?,
+            (BranchCmp(addr), _, _) => write_b_cmp(wtr, &internal_labels, &insn, addr)?,
             (JAL(addr), _, _) | (Jump(addr), _, _) => {
                 write_jump_target(wtr, block, mem, addr)?;
             }
@@ -127,7 +116,7 @@ fn write_linked_insn(
     block: &BlockInsn,
     mem: &Memory,
     insn: &Instruction,
-) -> Result<(), AsmWriteError> {
+) -> AsmResult<()> {
     use AsmWriteError::*;
     use LinkedVal::*;
 
@@ -190,7 +179,7 @@ fn write_embed_ptr<'f>(
     l: Link,
     insn: &Instruction,
     find_label: impl Fn(u32) -> Option<&'f Label>,
-) -> Result<(), AsmWriteError> {
+) -> AsmResult<()> {
     let (dst, base) = insn
         .ls_components()
         .ok_or_else(|| AsmWriteError::BadLS(insn.clone()))?;
@@ -204,12 +193,7 @@ fn write_embed_ptr<'f>(
     .map_err(Into::into)
 }
 
-fn write_jump_target(
-    wtr: &mut Wtr,
-    block: &BlockInsn,
-    mem: &Memory,
-    addr: u32,
-) -> Result<(), AsmWriteError> {
+fn write_jump_target(wtr: &mut Wtr, block: &BlockInsn, mem: &Memory, addr: u32) -> AsmResult<()> {
     use AsmWriteError::*;
     use LabelLoc::*;
 
@@ -264,4 +248,38 @@ fn find_label<'a>(mem: &'a Memory, block: &'a BlockInsn, addr: u32) -> Option<&'
             External(ref block) => overlayed_labels.get(block).and_then(|lbls| lbls.get(&addr)),
             MultipleExtern => multi_labels.and_then(|lbls| lbls.get(&addr)),
         })
+}
+
+fn write_branch(wtr: &mut Wtr, labels: &LabelMap, addr: u32) -> AsmResult<()> {
+    use AsmWriteError::BranchNotFound;
+
+    match find_branch(labels, addr) {
+        Ok(target) => write!(wtr, "{}", target).map_err(Into::into),
+        Err(BranchNotFound(..)) => {
+            write!(wtr, "{:#08X} # branch target not found", addr).map_err(Into::into)
+        }
+        Err(e) => Err(e),
+    }
+}
+
+fn write_b_cmp(wtr: &mut Wtr, labels: &LabelMap, insn: &Instruction, addr: u32) -> AsmResult<()> {
+    use AsmWriteError::{BranchNotFound, MissingOpString};
+
+    let insn_err = || MissingOpString(insn.clone());
+    let full_op = insn.op_str.as_ref().ok_or_else(insn_err)?;
+    let trunc_op = insn.truncate_op_imm().ok_or_else(insn_err)?;
+
+    match find_branch(labels, addr) {
+        Ok(target) => write!(wtr, "{}, {}", trunc_op, target).map_err(Into::into),
+        Err(BranchNotFound(..)) => {
+            write!(wtr, "{} # branch target not found", full_op).map_err(Into::into)
+        }
+        Err(e) => Err(e),
+    }
+}
+
+fn find_branch(labels: &LabelMap, addr: u32) -> AsmResult<&Label> {
+    labels
+        .get(&addr)
+        .ok_or_else(|| AsmWriteError::BranchNotFound(addr))
 }

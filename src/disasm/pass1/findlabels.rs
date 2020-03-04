@@ -1,9 +1,11 @@
 use crate::disasm::labels::{Label, LabelSet};
-use crate::disasm::memmap::{BlockName, BlockRange};
+use crate::disasm::memmap::{BlockName, BlockRange, Section};
 use crate::disasm::pass1::{
     linkinsn::{Link, LinkedVal},
+    parsedata::{FindDataIter, ParsedData},
     BlockLoadedSections, DataEntry, Instruction, JumpKind,
 };
+use log::debug;
 use std::collections::HashMap;
 use std::convert::TryInto;
 
@@ -27,7 +29,7 @@ pub struct LabelState<'a, 'rom> {
     pub externals: HashMap<u32, Label>,
     /// interperted data from the `rom` slice
     pub data: HashMap<u32, DataEntry<'rom>>,
-    /// Addresses that have labels in the existing maps, typicall from the config.
+    /// Addresses that have labels in the existing maps, typically from the config.
     /// These labels will be either global or internal
     pub existing_labels: HashMap<u32, ConfigLabelLoc>,
 }
@@ -99,6 +101,30 @@ impl<'a, 'rom> LabelState<'a, 'rom> {
             .for_each(|(label, section)| label.update_kind(section));
     }
 
+    pub fn add_data_labels(&mut self, sections: &BlockLoadedSections) {
+        let block_vram_start = self.range.get_ram_start() as u32;
+        for sec in sections.iter_data() {
+            let start_vram = sec.range.start;
+            let start_idx = (start_vram - block_vram_start) as usize;
+            let end_idx = (sec.range.end - block_vram_start) as usize;
+            let data_buf = &self.rom[start_idx..end_idx];
+            let parsed_iter = FindDataIter::new(data_buf, start_vram, sections, false)
+                .expect("valid data section");
+
+            parsed_iter.for_each(|res| {
+                let entry = res.unwrap();
+                insert_parsed_data_entry(self, entry, sections);
+            });
+
+            //println!("Searching for data in {}", &self.name);
+            //for res in parsed_iter {
+            //    let entry = res.expect("valid parsed data");
+            //    let already_labeled = self.existing_labels.contains_key(&entry.addr) || self.internals.contains_key(&entry.addr) || self.externals.contains_key(&entry.addr);
+            //    println!("{:2}{:x?} => found? {}", "", entry, already_labeled);
+            //}
+        }
+    }
+
     /// check if a given addr is a known label from the config file,
     /// either in the global label map, or in this overlay's map (if applicable)
     fn addr_in_config(&mut self, addr: u32) -> bool {
@@ -123,22 +149,21 @@ impl<'a, 'rom> LabelState<'a, 'rom> {
     fn is_internal(&self, addr: u32) -> bool {
         self.range.contains(addr)
     }
+    /// check if a given addr is contained within this state's .text/.data sections
     fn is_interal_loaded(&self, addr: u32) -> bool {
         self.range.load_contains(addr)
     }
 
     fn insert_local(&mut self, addr: u32) {
-        if self.addr_in_config(addr) {
-            return;
-        }
-
-        if !self.internals.contains_key(&addr) {
-            self.internals
-                .insert(addr, Label::local(addr, Some(self.name)));
-        }
+        self.insert_local_address(addr, Label::local);
     }
     fn insert_subroutine(&mut self, addr: u32) {
         self.insert_address(addr, Label::routine);
+    }
+    fn insert_jmptbl_targets(&mut self, targets: &[u32]) {
+        for &target in targets {
+            self.insert_local_address(target, Label::jmp_target);
+        }
     }
     fn insert_data(&mut self, addr: u32) {
         self.insert_address(addr, Label::data);
@@ -167,7 +192,7 @@ impl<'a, 'rom> LabelState<'a, 'rom> {
         }
     }
 
-    fn insert_address(&mut self, addr: u32, label_fn: LabelInsert) {
+    fn insert_address(&mut self, addr: u32, label_fn: LabelMaker) {
         if self.addr_in_config(addr) {
             return;
         }
@@ -181,9 +206,73 @@ impl<'a, 'rom> LabelState<'a, 'rom> {
         }
     }
 
+    fn insert_local_address(&mut self, addr: u32, label_fn: LabelMaker) {
+        if !self.is_internal(addr) {
+            // Probably capstone disassembling data as instructions
+            debug!(
+                "Addr {:x?} not in memory for {} [{:x?}]",
+                addr, self.name, self.range
+            );
+            return;
+        }
+
+        if self.addr_in_config(addr) {
+            return;
+        }
+
+        if !self.internals.contains_key(&addr) {
+            self.internals.insert(addr, label_fn(addr, Some(self.name)));
+        }
+    }
+
     fn address_to_offset(&self, addr: u32) -> usize {
         (addr - self.range.get_ram_start()) as usize
     }
 }
 
-type LabelInsert = fn(u32, Option<&BlockName>) -> Label;
+type LabelMaker = fn(u32, Option<&BlockName>) -> Label;
+
+fn insert_parsed_data_entry<'rom>(
+    ls: &mut LabelState<'_, 'rom>,
+    entry: DataEntry<'rom>,
+    secs: &BlockLoadedSections,
+) {
+    use ParsedData::*;
+    // add any labels to found data, if necessary
+    match &entry.data {
+        Float(..) => return ls.insert_float(entry.addr),
+        Double(..) => return ls.insert_double(entry.addr),
+        JmpTbl(..) => ls.insert_data(entry.addr),
+        Asciz(..) | Ptr(..) => (),
+    };
+    // add any "sub-labels" passed on parsed data
+    match &entry.data {
+        Ptr(ptr) => insert_unk_ptr(ls, *ptr, secs),
+        JmpTbl(ts) => ls.insert_jmptbl_targets(ts),
+        Asciz(..) => (),
+        Float(..) | Double(..) => unreachable!(),
+    }
+    // store parsed data, if not already there due to parsing the instructions
+    if let Some(old) = ls.data.get_mut(&entry.addr) {
+        let replace = match (&old.data, &entry.data) {
+            (Float(..), _) => false,
+            (Double(..), _) => false,
+            _ => true,
+        };
+        if replace {
+            ls.data.insert(entry.addr, entry);
+        }
+    } else {
+        ls.data.insert(entry.addr, entry);
+    }
+}
+
+fn insert_unk_ptr(ls: &mut LabelState, ptr: u32, sections: &BlockLoadedSections) {
+    let section = sections.find_address(ptr).map(|s| s.kind);
+
+    match section {
+        Some(Section::Text) => ls.insert_subroutine(ptr),
+        // Either Section::Data, bss, or external
+        _ => ls.insert_data(ptr),
+    }
+}
