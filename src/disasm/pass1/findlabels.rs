@@ -6,7 +6,7 @@ use crate::disasm::pass1::{
     BlockLoadedSections, DataEntry, Instruction, JumpKind,
 };
 use log::debug;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::convert::TryInto;
 
 /// A collection of addresses and labels generated from parsing instructions.
@@ -28,7 +28,7 @@ pub struct LabelState<'a, 'rom> {
     /// subroutines or data that are not in the current block
     pub externals: HashMap<u32, Label>,
     /// interperted data from the `rom` slice
-    pub data: HashMap<u32, DataEntry<'rom>>,
+    pub data: BTreeMap<u32, DataEntry<'rom>>,
     /// Addresses that have labels in the existing maps, typically from the config.
     /// These labels will be either global or internal
     pub existing_labels: HashMap<u32, ConfigLabelLoc>,
@@ -57,7 +57,7 @@ impl<'a, 'rom> LabelState<'a, 'rom> {
             config_ovl: set.overlays.get(name),
             internals: HashMap::new(),
             externals: HashMap::new(),
-            data: HashMap::new(),
+            data: BTreeMap::new(),
             existing_labels: HashMap::new(),
         }
     }
@@ -108,6 +108,7 @@ impl<'a, 'rom> LabelState<'a, 'rom> {
             let start_idx = (start_vram - block_vram_start) as usize;
             let end_idx = (sec.range.end - block_vram_start) as usize;
             let data_buf = &self.rom[start_idx..end_idx];
+            // TODO: put +/- expansion pak into config
             let parsed_iter = FindDataIter::new(data_buf, start_vram, sections, false)
                 .expect("valid data section");
 
@@ -115,13 +116,6 @@ impl<'a, 'rom> LabelState<'a, 'rom> {
                 let entry = res.unwrap();
                 insert_parsed_data_entry(self, entry, sections);
             });
-
-            //println!("Searching for data in {}", &self.name);
-            //for res in parsed_iter {
-            //    let entry = res.expect("valid parsed data");
-            //    let already_labeled = self.existing_labels.contains_key(&entry.addr) || self.internals.contains_key(&entry.addr) || self.externals.contains_key(&entry.addr);
-            //    println!("{:2}{:x?} => found? {}", "", entry, already_labeled);
-            //}
         }
     }
 

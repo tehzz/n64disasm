@@ -18,7 +18,7 @@ use err_derive::Error;
 use linkinsn::{link_instructions, LinkInsnErr, LinkState};
 use log::info;
 use rayon::prelude::*;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use findfiles::FindFileState;
 use findlabels::LabelState;
@@ -60,7 +60,7 @@ pub struct BlockInsn<'rom> {
     /// Sections that are loaded from ROM (.text and .data) for this block
     pub loaded_sections: BlockLoadedSections,
     /// Parsed data from this block's .data section
-    pub parsed_data: HashMap<u32, DataEntry<'rom>>,
+    pub parsed_data: BTreeMap<u32, DataEntry<'rom>>,
     /// Labels that could be in multiple other blocks
     pub unresolved_labels: Option<HashMap<u32, Label>>,
     /// Map of address to where the label for the address is

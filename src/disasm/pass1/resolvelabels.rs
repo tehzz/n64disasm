@@ -25,7 +25,7 @@ use crate::disasm::{
 };
 use err_derive::Error;
 use log::{debug, info};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 #[derive(Debug, Error)]
 pub enum ResolveLabelsErr {
@@ -36,7 +36,7 @@ pub enum ResolveLabelsErr {
 #[derive(Debug)]
 pub struct ResolvedBlock<'c, 'r> {
     pub instructions: Vec<Instruction>,
-    pub parsed_data: HashMap<u32, DataEntry<'r>>,
+    pub parsed_data: BTreeMap<u32, DataEntry<'r>>,
     pub label_loc_cache: HashMap<u32, LabelPlace>,
     pub multi_block_labels: Option<Vec<Label>>,
     pub info: &'c CodeBlock,
@@ -106,7 +106,7 @@ pub struct LabeledBlock<'c, 'r> {
     pub instructions: Vec<Instruction>,
     pub info: &'c CodeBlock,
     pub loaded_sections: BlockLoadedSections,
-    pub parsed_data: HashMap<u32, DataEntry<'r>>,
+    pub parsed_data: BTreeMap<u32, DataEntry<'r>>,
     pub internal_labels: HashMap<u32, Label>,
     pub external_labels: HashMap<u32, Label>,
     pub existing_labels: HashMap<u32, ConfigLabelLoc>,
@@ -115,7 +115,7 @@ pub struct LabeledBlock<'c, 'r> {
 struct ExternLabeledBlock<'c, 'r> {
     instructions: Vec<Instruction>,
     info: &'c CodeBlock,
-    parsed_data: HashMap<u32, DataEntry<'r>>,
+    parsed_data: BTreeMap<u32, DataEntry<'r>>,
     label_loc_cache: HashMap<u32, LabelPlace>,
     external_labels: HashMap<u32, Label>,
 }
@@ -123,7 +123,7 @@ struct ExternLabeledBlock<'c, 'r> {
 struct ProcessedBlock<'c, 'r> {
     instructions: Vec<Instruction>,
     info: &'c CodeBlock,
-    parsed_data: HashMap<u32, DataEntry<'r>>,
+    parsed_data: BTreeMap<u32, DataEntry<'r>>,
     label_loc_cache: HashMap<u32, LabelPlace>,
     unresolved: UnresolvedBlockLabels,
 }
