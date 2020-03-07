@@ -72,7 +72,6 @@ pub fn pass2(p1result: Pass1, rom: &[u8], out: &Path) -> P2Result<()> {
 
     blocks
         .into_par_iter()
-        .take(20)
         .try_for_each(|block| write_block(block, &info, &rom, &out))?;
 
     todo!()

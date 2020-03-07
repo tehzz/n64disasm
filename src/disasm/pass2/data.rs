@@ -185,6 +185,7 @@ where
 }
 
 fn write_glabel(f: &mut Wtr, label: &Label) -> io::Result<()> {
+    writeln!(f, "")?;
     writeln!(f, "glabel {}", label)
 }
 
