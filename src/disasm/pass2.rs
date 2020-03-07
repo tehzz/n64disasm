@@ -80,10 +80,12 @@ pub fn pass2(p1result: Pass1, rom: &[u8], out: &Path) -> P2Result<()> {
 
 fn write_notfound_symbols(p: &Path, syms: &HashMap<u32, Label>) -> io::Result<()> {
     let mut f = BufWriter::new(File::create(p)?);
+    let mut sorted_syms = syms.values().collect::<Vec<_>>();
+    sorted_syms.sort_unstable_by(lower_addr);
 
     writeln!(&mut f, "/* Unknown Symbols */\n")?;
-    for (addr, label) in syms {
-        writeln!(&mut f, "{} = {:#08X};", label, addr)?;
+    for label in sorted_syms {
+        writeln!(&mut f, "{} = {:#08X};", label, label.addr)?;
     }
 
     Ok(())
@@ -157,10 +159,6 @@ fn separate_and_sort_labels<'a>(
     block: &CodeBlock,
     block_labels: &'a HashMap<u32, Label>,
 ) -> (Vec<&'a Label>, Vec<&'a Label>) {
-    fn lower_addr(a: &&Label, b: &&Label) -> Ordering {
-        a.addr.cmp(&b.addr)
-    }
-
     let (mut bss, mut data): (Vec<_>, Vec<_>) = block_labels
         .values()
         .filter(|l| l.is_data())
@@ -176,6 +174,10 @@ fn separate_and_sort_labels<'a>(
     data.sort_unstable_by(lower_addr);
 
     (data, bss)
+}
+
+fn lower_addr(a: &&Label, b: &&Label) -> Ordering {
+    a.addr.cmp(&b.addr)
 }
 
 fn find_label<'a>(mem: &'a Memory, block: &'a BlockInsn, addr: u32) -> Option<&'a Label> {
