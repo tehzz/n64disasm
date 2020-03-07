@@ -119,9 +119,10 @@ fn write_block(block: BlockInsn, info: &Memory, rom: &[u8], out: &Path) -> P2Res
         .map_err(|e| E::AsmError(name.clone(), e))?;
 
     let mut data_file = make_file(&out_base, &name_os, ".data.s")?;
+    let bin_filename = raw_bin.file_name().expect("valid file").to_string_lossy();
     data::write_block_data(
         &mut data_file,
-        &raw_bin,
+        &bin_filename,
         &data_labels,
         &data_sections,
         &block,
