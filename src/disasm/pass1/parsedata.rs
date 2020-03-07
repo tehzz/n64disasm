@@ -1,8 +1,15 @@
 use crate::disasm::{memmap::Section, pass1::BlockLoadedSections};
 use err_derive::Error;
+use std::collections::{BTreeMap, HashMap};
 use std::convert::TryInto;
 use std::fmt;
 use std::ops::Range;
+
+macro_rules! align {
+    ($val: expr, $to: expr) => {
+        (($val + ($to - 1)) & !($to - 1))
+    };
+}
 
 #[derive(Debug, Error)]
 pub enum DataParseErr {
@@ -15,6 +22,8 @@ pub enum DataParseErr {
 }
 
 type DpResult<T> = Result<T, DataParseErr>;
+type DataMap<'r> = BTreeMap<u32, DataEntry<'r>>;
+type DataSizeMap = HashMap<u32, usize>;
 
 // move to a parsedata module
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -34,10 +43,11 @@ pub struct DataEntry<'rom> {
 
 #[derive(Debug)]
 pub struct FindDataIter<'a, 'rom> {
-    buffer: &'rom [u8], // full data slice to parse
-    start_ram: u32,     // start of full data slice
-    csr: &'rom [u8],    // unparsed slice of buffer
-    at: u32,            // ram address of start of csr
+    buffer: &'rom [u8],         // full data slice to parse
+    start_ram: u32,             // start of full data slice
+    csr: &'rom [u8],            // unparsed slice of buffer
+    at: u32,                    // ram address of start of csr
+    known: Option<DataSizeMap>, // map between known address and the size of known data
     vram: Range<u32>,
     sections: &'a BlockLoadedSections,
     yielded: Option<DpResult<DataEntry<'rom>>>,
@@ -79,7 +89,7 @@ enum State {
 
 #[derive(Debug, Copy, Clone)]
 enum Event {
-    Nothing,
+    NothingFound,
     IssueReported,
     EndOfData,
     YieldData,
@@ -96,7 +106,7 @@ impl State {
         use State::*;
 
         match (self, event) {
-            (Checking, Nothing) => Checking,
+            (Checking, NothingFound) => Checking,
             // Buffered data to process
             (_, BufferedPtr(offset, ptr)) => AddPtr(offset, ptr),
             (_, BufferedAscii(offset)) => ParseAscii(offset),
@@ -104,7 +114,7 @@ impl State {
             (Checking, FoundPtr(offset, ptr)) => AddPtr(offset, ptr),
             // Single pointer to this sections .text
             (Checking, FoundTextPtr(offset, ptr)) => StartJmpTbl(offset, ptr),
-            (StartJmpTbl(offset, ptr), Nothing) => AddPtr(*offset, *ptr),
+            (StartJmpTbl(offset, ptr), NothingFound) => AddPtr(*offset, *ptr),
             (StartJmpTbl(off, ptr), FoundPtr(off2, ptr2)) => {
                 AddTwoPtr([(*off, *ptr), (off2, ptr2)])
             }
@@ -115,7 +125,7 @@ impl State {
             (StartJmpTbl(offset, ptr), FoundTextPtr(_, ptr2)) => {
                 GrowJmpTbl(*offset, Some(vec![*ptr, ptr2]))
             }
-            (GrowJmpTbl(offset, ref mut tbl), Nothing) => EndJmpTbl(*offset, tbl.take()),
+            (GrowJmpTbl(offset, ref mut tbl), NothingFound) => EndJmpTbl(*offset, tbl.take()),
             (GrowJmpTbl(offset, ref mut tbl), EndOfData) => EndJmpTbl(*offset, tbl.take()),
             (GrowJmpTbl(offset, ref mut tbl), FoundPtr(off2, ptr2)) => {
                 EndJmpTblAndPtr((*offset, tbl.take()), (off2, ptr2))
@@ -138,7 +148,7 @@ impl State {
 
             // loop conditions
             (_, YieldData) => Checking,
-            (_, Nothing) => Checking,
+            (_, NothingFound) => Checking,
 
             // Error
             (Failure(..), IssueReported) => Finished,
@@ -153,6 +163,7 @@ impl<'a, 'rom> FindDataIter<'a, 'rom> {
         start_ram: u32,
         sections: &'a BlockLoadedSections,
         use_mempak: bool,
+        known: Option<&DataMap<'_>>,
     ) -> DpResult<Self> {
         if buffer.len() % 4 != 0 {
             return Err(DataParseErr::BadDataLen);
@@ -167,11 +178,18 @@ impl<'a, 'rom> FindDataIter<'a, 'rom> {
             0x80000400..0x80400000
         };
 
+        let known = known.map(|m| {
+            m.iter()
+                .map(|(addr, entry)| (*addr, entry.byte_size()))
+                .collect()
+        });
+
         Ok(Self {
             buffer,
             start_ram,
             csr: buffer,
             at: start_ram,
+            known,
             yielded: None,
             state: State::Checking,
             sections,
@@ -245,7 +263,7 @@ impl<'a, 'rom> FindDataIter<'a, 'rom> {
 
                 IssueReported
             }
-            Finished => Nothing,
+            Finished => NothingFound,
         }
     }
 
@@ -260,21 +278,21 @@ impl<'a, 'rom> FindDataIter<'a, 'rom> {
             .count();
 
         if size == 0 {
-            return Event::Nothing;
+            return Event::NothingFound;
         }
         // check that the final byte was the nul terminator
         match str_buffer.get(size).copied() {
             Some(b) if b == NUL => (),
-            None => return Event::Nothing,
-            Some(_) => return Event::Nothing,
+            None => return Event::NothingFound,
+            Some(_) => return Event::NothingFound,
         };
         // check that all bytes up to the next word alignment are NUL
         // as IDO aligns string rodata to the nearest word with pad NUL bytes
         let is_aligned_null = str_buffer
-            .get(size..align4(size))
+            .get(size..align!(size, 4))
             .map_or(true, |s| s.iter().all(|b| *b == NUL));
         if !is_aligned_null {
-            return Event::Nothing;
+            return Event::NothingFound;
         }
 
         let possible_str = &str_buffer[..size];
@@ -298,10 +316,16 @@ impl<'a, 'rom> FindDataIter<'a, 'rom> {
 
         &self.buffer[idx..]
     }
-
+    /// check if there is already parsed data at RAM `addr`.
+    /// If so, return the size of the known `DataEntry`
+    fn check_if_known(&self, addr: u32) -> Option<usize> {
+        self.known.as_ref().and_then(|m| m.get(&addr)).copied()
+    }
+    /// Advance the internal cursor to the address `to` aligned to
+    /// 4 bytes. Returns false if the cursor could not be advanced (EOF)
     fn advance_and_word_align(&mut self, to: u32) -> bool {
         let csr_ram_addr = self.at;
-        let to_aligned = (to + 3) & !3;
+        let to_aligned = align!(to, 4);
         let new_csr_start = (to_aligned - csr_ram_addr) as usize;
 
         if new_csr_start < self.csr.len() {
@@ -313,12 +337,23 @@ impl<'a, 'rom> FindDataIter<'a, 'rom> {
             false
         }
     }
+    fn advance_by_aligned(&mut self, by: u32) -> bool {
+        self.advance_and_word_align(self.at + by)
+    }
 
     fn check_next_word(&mut self) -> Event {
         use Event::*;
 
         if self.csr.len() < 4 {
             return EndOfData;
+        }
+
+        if let Some(size) = self.check_if_known(self.at) {
+            if !self.advance_by_aligned(size as u32) {
+                return EndOfData;
+            } else {
+                return NothingFound;
+            }
         }
 
         let (bytes, remaining) = self.csr.split_at(4);
@@ -342,7 +377,7 @@ impl<'a, 'rom> FindDataIter<'a, 'rom> {
             // strings should return true
             FoundAscii(offset)
         } else {
-            Nothing
+            NothingFound
         }
     }
 }
@@ -354,7 +389,7 @@ impl<'rom> DataEntry<'rom> {
             data: ParsedData::JmpTbl(ptrs.into()),
         }
     }
-    fn ptr(addr: u32, ptr: u32) -> Self {
+    pub fn ptr(addr: u32, ptr: u32) -> Self {
         Self {
             addr,
             data: ParsedData::Ptr(ptr),
@@ -384,6 +419,17 @@ impl<'rom> DataEntry<'rom> {
             data: ParsedData::Double(val),
         }
     }
+    pub fn byte_size(&self) -> usize {
+        use ParsedData::*;
+
+        match self.data {
+            Float(..) => 4,
+            Double(..) => 8,
+            Asciz(ref s) => align!(s.len() + 1, 4), // include NUL byte
+            JmpTbl(ref t) => t.len() * 4,
+            Ptr(..) => 4,
+        }
+    }
 }
 
 impl<'rom> fmt::Display for DataEntry<'rom> {
@@ -393,7 +439,7 @@ impl<'rom> fmt::Display for DataEntry<'rom> {
         match self.data {
             Float(h) => write!(f, "{}", f32::from_bits(h)),
             Double(h) => write!(f, "{}", f64::from_bits(h)),
-            Asciz(s) => write!(f, "{}", s),
+            Asciz(s) => write!(f, "{:?}", s),
             JmpTbl(ref t) => write!(f, "{:X?}", t),
             Ptr(p) => write!(f, "{:X?}", p),
         }
@@ -403,10 +449,6 @@ impl<'rom> fmt::Display for DataEntry<'rom> {
 // check if byte is ascii alphanumeric, symbol, or whitespace
 fn valid_ascii(b: u8) -> bool {
     b.is_ascii() && (b.is_ascii_whitespace() || !b.is_ascii_control())
-}
-
-fn align4(v: usize) -> usize {
-    (v + 3) & !3
 }
 
 #[cfg(test)]
@@ -428,5 +470,12 @@ mod test {
             invalid.iter().copied().all(|b| !valid_ascii(b)),
             "invalid ascii read as valid"
         );
+    }
+
+    #[test]
+    fn check_align() {
+        assert_eq!(align!(0x11, 4), 0x14);
+        assert_eq!(align!(0x11, 8), 0x18);
+        assert_eq!(align!(0x11, 16), 0x20);
     }
 }

@@ -6,7 +6,7 @@ use crate::disasm::{
         BlockInsn, BlockLoadedSections, FileBreak, JumpKind, LabelPlace, Link, LinkedVal,
         LoadSectionInfo,
     },
-    pass2::{Memory, Wtr},
+    pass2::{find_label, Memory, Wtr},
 };
 use err_derive::Error;
 use std::collections::HashMap;
@@ -227,27 +227,6 @@ fn write_jump_target(wtr: &mut Wtr, block: &BlockInsn, mem: &Memory, addr: u32) 
         NotFound => write!(wtr, "{} # couldn't be resolved", target).map_err(Into::into),
         Unspecified => Err(UnspecifiedLabel(addr, target.clone())),
     }
-}
-
-fn find_label<'a>(mem: &'a Memory, block: &'a BlockInsn, addr: u32) -> Option<&'a Label> {
-    use LabelPlace::*;
-
-    let internal_labels = &mem.label_set.get_block_map(&block.name);
-    let global_labels = &mem.label_set.globals;
-    let notfound_labels = &mem.not_found_labels;
-    let overlayed_labels = &mem.label_set.overlays;
-    let multi_labels = block.unresolved_labels.as_ref();
-
-    block
-        .label_locations
-        .get(&addr)
-        .and_then(|place| match place {
-            Internal => internal_labels.get(&addr),
-            Global => global_labels.get(&addr),
-            NotFound => notfound_labels.get(&addr),
-            External(ref block) => overlayed_labels.get(block).and_then(|lbls| lbls.get(&addr)),
-            MultipleExtern => multi_labels.and_then(|lbls| lbls.get(&addr)),
-        })
 }
 
 fn write_branch(wtr: &mut Wtr, labels: &LabelMap, addr: u32) -> AsmResult<()> {

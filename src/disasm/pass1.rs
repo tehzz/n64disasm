@@ -30,7 +30,7 @@ pub use findfiles::FileBreak;
 pub use findsections::{BlockLoadedSections, LoadSectionInfo};
 pub use jumps::JumpKind;
 pub use linkinsn::{Link, LinkedVal};
-pub use parsedata::DataEntry;
+pub use parsedata::{DataEntry, ParsedData};
 pub use resolvelabels::{LabelPlace, ResolveLabelsErr, ResolvedBlock};
 
 #[derive(Debug, Error)]

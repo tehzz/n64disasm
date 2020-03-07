@@ -5,7 +5,7 @@ mod text;
 use crate::disasm::{
     labels::{Label, LabelSet},
     memmap::{BlockName, CodeBlock, MemoryMap, Section},
-    pass1::{BlockInsn, Pass1},
+    pass1::{BlockInsn, LabelPlace, Pass1},
 };
 use err_derive::Error;
 use rayon::prelude::*;
@@ -118,16 +118,14 @@ fn write_block(block: BlockInsn, info: &Memory, rom: &[u8], out: &Path) -> P2Res
     text::write_block_asm(&mut asm_file, &block, &text_sections, &info)
         .map_err(|e| E::AsmError(name.clone(), e))?;
 
-    for (_addr, entry) in &block.parsed_data {
-        println!("parsed <{}> in {}: {:x?}", &entry, name, &entry);
-    }
     let mut data_file = make_file(&out_base, &name_os, ".data.s")?;
     data::write_block_data(
         &mut data_file,
         &raw_bin,
         &data_labels,
         &data_sections,
-        block_info,
+        &block,
+        &info,
     )
     .map_err(|e| E::DataError(name.clone(), e))?;
 
@@ -177,4 +175,25 @@ fn separate_and_sort_labels<'a>(
     data.sort_unstable_by(lower_addr);
 
     (data, bss)
+}
+
+fn find_label<'a>(mem: &'a Memory, block: &'a BlockInsn, addr: u32) -> Option<&'a Label> {
+    use LabelPlace::*;
+
+    let internal_labels = &mem.label_set.get_block_map(&block.name);
+    let global_labels = &mem.label_set.globals;
+    let notfound_labels = &mem.not_found_labels;
+    let overlayed_labels = &mem.label_set.overlays;
+    let multi_labels = block.unresolved_labels.as_ref();
+
+    block
+        .label_locations
+        .get(&addr)
+        .and_then(|place| match place {
+            Internal => internal_labels.get(&addr),
+            Global => global_labels.get(&addr),
+            NotFound => notfound_labels.get(&addr),
+            External(ref block) => overlayed_labels.get(block).and_then(|lbls| lbls.get(&addr)),
+            MultipleExtern => multi_labels.and_then(|lbls| lbls.get(&addr)),
+        })
 }

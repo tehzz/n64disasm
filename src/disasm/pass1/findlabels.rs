@@ -1,4 +1,4 @@
-use crate::disasm::labels::{Label, LabelSet};
+use crate::disasm::labels::{Label, LabelKind, LabelSet};
 use crate::disasm::memmap::{BlockName, BlockRange, Section};
 use crate::disasm::pass1::{
     linkinsn::{Link, LinkedVal},
@@ -108,8 +108,9 @@ impl<'a, 'rom> LabelState<'a, 'rom> {
             let start_idx = (start_vram - block_vram_start) as usize;
             let end_idx = (sec.range.end - block_vram_start) as usize;
             let data_buf = &self.rom[start_idx..end_idx];
+            let known = Some(&self.data);
             // TODO: put +/- expansion pak into config
-            let parsed_iter = FindDataIter::new(data_buf, start_vram, sections, false)
+            let parsed_iter = FindDataIter::new(data_buf, start_vram, sections, false, known)
                 .expect("valid data section");
 
             parsed_iter.for_each(|res| {
@@ -144,20 +145,17 @@ impl<'a, 'rom> LabelState<'a, 'rom> {
         self.range.contains(addr)
     }
     /// check if a given addr is contained within this state's .text/.data sections
-    fn is_interal_loaded(&self, addr: u32) -> bool {
+    fn is_internal_loaded(&self, addr: u32) -> bool {
         self.range.load_contains(addr)
     }
 
     fn insert_local(&mut self, addr: u32) {
-        self.insert_local_address(addr, Label::local);
+        self.insert_local_address(addr, Label::local, |ls, addr| {
+            !ls.internals.contains_key(&addr)
+        });
     }
     fn insert_subroutine(&mut self, addr: u32) {
         self.insert_address(addr, Label::routine);
-    }
-    fn insert_jmptbl_targets(&mut self, targets: &[u32]) {
-        for &target in targets {
-            self.insert_local_address(target, Label::jmp_target);
-        }
     }
     fn insert_data(&mut self, addr: u32) {
         self.insert_address(addr, Label::data);
@@ -165,7 +163,7 @@ impl<'a, 'rom> LabelState<'a, 'rom> {
     fn insert_float(&mut self, addr: u32) {
         self.insert_address(addr, Label::data);
 
-        if self.is_interal_loaded(addr) {
+        if self.is_internal_loaded(addr) {
             let idx = self.address_to_offset(addr);
             let bytes: [u8; 4] = self.rom[idx..idx + 4].try_into().unwrap();
             let hex = u32::from_be_bytes(bytes);
@@ -177,7 +175,7 @@ impl<'a, 'rom> LabelState<'a, 'rom> {
     fn insert_double(&mut self, addr: u32) {
         self.insert_address(addr, Label::data);
 
-        if self.is_interal_loaded(addr) {
+        if self.is_internal_loaded(addr) {
             let idx = self.address_to_offset(addr);
             let bytes: [u8; 8] = self.rom[idx..idx + 8].try_into().unwrap();
             let hex = u64::from_be_bytes(bytes);
@@ -200,7 +198,7 @@ impl<'a, 'rom> LabelState<'a, 'rom> {
         }
     }
 
-    fn insert_local_address(&mut self, addr: u32, label_fn: LabelMaker) {
+    fn insert_local_address(&mut self, addr: u32, label_fn: LabelMaker, check: LabelChecker) {
         if !self.is_internal(addr) {
             // Probably capstone disassembling data as instructions
             debug!(
@@ -214,7 +212,7 @@ impl<'a, 'rom> LabelState<'a, 'rom> {
             return;
         }
 
-        if !self.internals.contains_key(&addr) {
+        if check(&self, addr) {
             self.internals.insert(addr, label_fn(addr, Some(self.name)));
         }
     }
@@ -225,6 +223,7 @@ impl<'a, 'rom> LabelState<'a, 'rom> {
 }
 
 type LabelMaker = fn(u32, Option<&BlockName>) -> Label;
+type LabelChecker = fn(&LabelState, u32) -> bool;
 
 fn insert_parsed_data_entry<'rom>(
     ls: &mut LabelState<'_, 'rom>,
@@ -242,12 +241,12 @@ fn insert_parsed_data_entry<'rom>(
     // add any "sub-labels" passed on parsed data
     match &entry.data {
         Ptr(ptr) => insert_unk_ptr(ls, *ptr, secs),
-        JmpTbl(ts) => ls.insert_jmptbl_targets(ts),
+        JmpTbl(ts) => insert_jmptbl_labels(ls, ts),
         Asciz(..) => (),
         Float(..) | Double(..) => unreachable!(),
     }
     // store parsed data, if not already there due to parsing the instructions
-    if let Some(old) = ls.data.get_mut(&entry.addr) {
+    if let Some(old) = ls.data.get(&entry.addr) {
         let replace = match (&old.data, &entry.data) {
             (Float(..), _) => false,
             (Double(..), _) => false,
@@ -257,7 +256,13 @@ fn insert_parsed_data_entry<'rom>(
             ls.data.insert(entry.addr, entry);
         }
     } else {
-        ls.data.insert(entry.addr, entry);
+        match &entry.data {
+            Ptr(..) | Asciz(..) => {
+                ls.data.insert(entry.addr, entry);
+            }
+            JmpTbl(ts) => store_jmbtbl_as_ptrs(ls, ts, entry.addr),
+            Float(..) | Double(..) => unreachable!(),
+        };
     }
 }
 
@@ -269,4 +274,27 @@ fn insert_unk_ptr(ls: &mut LabelState, ptr: u32, sections: &BlockLoadedSections)
         // Either Section::Data, bss, or external
         _ => ls.insert_data(ptr),
     }
+}
+
+fn insert_jmptbl_labels(ls: &mut LabelState, targets: &[u32]) {
+    for &target in targets {
+        ls.insert_local_address(target, Label::jmp_target, |ls, addr| {
+            ls.internals
+                .get(&addr)
+                .map_or(true, |l| l.kind == LabelKind::Local)
+        })
+    }
+}
+
+/// Store the actual labels of a jump table as individual pointers
+/// so that labels/pointers to the jump table entries can be easily printed
+fn store_jmbtbl_as_ptrs(ls: &mut LabelState, targets: &[u32], start: u32) {
+    targets
+        .into_iter()
+        .copied()
+        .enumerate()
+        .map(|(i, t)| DataEntry::ptr(start + i as u32 * 4, t))
+        .for_each(|entry| {
+            ls.data.insert(entry.addr, entry);
+        })
 }
