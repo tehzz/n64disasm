@@ -72,7 +72,7 @@ enum DelaySlot {
 
 impl DelaySlot {
     // return the next state of an instruction after a "CPU tick"
-    fn tick_pc(&self) -> Self {
+    fn tick_pc(self) -> Self {
         match self {
             Self::Inactive => Self::Inactive,
             Self::QueuedReturn => Self::DelayReturn,
@@ -126,11 +126,7 @@ type LinksIter = Result<
 >;
 
 // TODO: have an instruction limit (<90?) for pointers just in case
-fn generate_insn_links<'s, 'i>(
-    state: &'s mut LinkState,
-    insn: &'i Instruction,
-    offset: usize,
-) -> LinksIter {
+fn generate_insn_links(state: &mut LinkState, insn: &Instruction, offset: usize) -> LinksIter {
     use LinkInsnErr::*;
     use LinkedVal::*;
     use LuiState::*;

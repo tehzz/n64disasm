@@ -218,7 +218,7 @@ impl<'a, 'rom> FindDataIter<'a, 'rom> {
             }
             AddTwoPtr(ptrs) => {
                 let [p1, p2] = ptrs;
-                let entry1 = DataEntry::tupple_ptr(&p1);
+                let entry1 = DataEntry::tupple_ptr(p1);
                 self.yielded = Some(Ok(entry1));
 
                 BufferedPtr(p2.0, p2.1)
@@ -249,7 +249,7 @@ impl<'a, 'rom> FindDataIter<'a, 'rom> {
             }
 
             PtrThenAscii(ptr, ascii_off) => {
-                let entry = DataEntry::tupple_ptr(&ptr);
+                let entry = DataEntry::tupple_ptr(ptr);
                 self.yielded = Some(Ok(entry));
 
                 BufferedAscii(ascii_off)
@@ -395,7 +395,7 @@ impl<'rom> DataEntry<'rom> {
             data: ParsedData::Ptr(ptr),
         }
     }
-    fn tupple_ptr(set: &(u32, u32)) -> Self {
+    fn tupple_ptr(set: (u32, u32)) -> Self {
         Self {
             addr: set.0,
             data: ParsedData::Ptr(set.1),

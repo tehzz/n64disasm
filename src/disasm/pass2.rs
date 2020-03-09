@@ -184,6 +184,7 @@ fn separate_and_sort_labels<'a>(
     (data, bss)
 }
 
+#[allow(clippy::trivially_copy_pass_by_ref)]
 fn lower_addr(a: &&Label, b: &&Label) -> Ordering {
     a.addr.cmp(&b.addr)
 }

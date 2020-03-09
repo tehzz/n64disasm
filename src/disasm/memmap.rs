@@ -145,7 +145,7 @@ impl MemoryMap {
         &'m self,
         block_idx: &'m [usize],
     ) -> impl Iterator<Item = &CodeBlock> + 'm {
-        block_idx.into_iter().copied().map(move |i| &self.blocks[i])
+        block_idx.iter().copied().map(move |i| &self.blocks[i])
     }
     /// An iterator over just the static/always loaded blocks in this memory map
     fn iter_static_blocks<'m>(&'m self) -> impl Iterator<Item = &CodeBlock> + 'm {
@@ -312,7 +312,7 @@ fn create_overlay_map(
             let paired_overlays = buffer.iter().map(|&o| o.clone()).chain(base_overlays);
 
             map.entry(ovl.clone())
-                .or_insert_with(|| HashSet::new())
+                .or_insert_with(HashSet::new)
                 .extend(paired_overlays)
         }
 

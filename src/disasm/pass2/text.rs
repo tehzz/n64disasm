@@ -102,7 +102,7 @@ pub(super) fn write_block_asm(
             }
             (_, Empty, Some(op)) => write!(wtr, "{}", op)?,
             (NoJump, _, _) => write_linked_insn(wtr, block, mem, insn)?,
-            _ => Err(InsnLabel(insn.clone()))?,
+            _ => return Err(InsnLabel(insn.clone())),
         }
 
         writeln!(wtr)?;

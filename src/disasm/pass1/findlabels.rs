@@ -122,6 +122,7 @@ impl<'a, 'rom> LabelState<'a, 'rom> {
 
     /// check if a given addr is a known label from the config file,
     /// either in the global label map, or in this overlay's map (if applicable)
+    #[allow(clippy::map_entry)]
     fn addr_in_config(&mut self, addr: u32) -> bool {
         if self.existing_labels.contains_key(&addr) {
             true
@@ -190,11 +191,14 @@ impl<'a, 'rom> LabelState<'a, 'rom> {
         }
 
         if self.is_internal(addr) {
-            if !self.internals.contains_key(&addr) {
-                self.internals.insert(addr, label_fn(addr, Some(self.name)));
-            }
-        } else if !self.externals.contains_key(&addr) {
-            self.externals.insert(addr, label_fn(addr, None));
+            let name = &self.name;
+            self.internals
+                .entry(addr)
+                .or_insert_with(|| label_fn(addr, Some(name)));
+        } else {
+            self.externals
+                .entry(addr)
+                .or_insert_with(|| label_fn(addr, None));
         }
     }
 
@@ -290,7 +294,7 @@ fn insert_jmptbl_labels(ls: &mut LabelState, targets: &[u32]) {
 /// so that labels/pointers to the jump table entries can be easily printed
 fn store_jmbtbl_as_ptrs(ls: &mut LabelState, targets: &[u32], start: u32) {
     targets
-        .into_iter()
+        .iter()
         .copied()
         .enumerate()
         .map(|(i, t)| DataEntry::ptr(start + i as u32 * 4, t))

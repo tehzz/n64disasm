@@ -250,13 +250,13 @@ impl LabelSet {
 impl fmt::Display for LabelSet {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         writeln!(f, "Global Labels ({}):", self.globals.len())?;
-        for (_addr, label) in &self.globals {
+        for label in self.globals.values() {
             writeln!(f, "{:4}{} << {:x?}", "", &label, &label)?;
         }
         writeln!(f, "Overlayed Labels:")?;
         for (block, set) in &self.overlays {
             writeln!(f, "{:4}{} ({} labels):", "", &block, set.len())?;
-            for (_addr, label) in set {
+            for label in set.values() {
                 writeln!(f, "{:8}{} << {:x?}", "", &label, &label)?;
             }
         }

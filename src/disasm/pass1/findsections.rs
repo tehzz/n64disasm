@@ -390,7 +390,7 @@ impl FindFileEnd {
         let ram_map = &self.ram_map;
         let find_addr = |a| ram_map.iter().find_map(|r| r.0.contains(&a).b_then(r.1));
         let map_insn_to_area = |i: &'a Instruction| find_addr(i.vaddr).map(|l| (i, l));
-        let insns_iter = insns.into_iter().filter_map(map_insn_to_area);
+        let insns_iter = insns.iter().filter_map(map_insn_to_area);
 
         for (insn, location) in insns_iter {
             let issue = check_bad_insn(insn);
@@ -497,6 +497,7 @@ impl Malformed {
     }
 
     /// Are the instructions after `self.text_start` legal or illegal?
+    #[allow(clippy::if_same_then_else)]
     fn is_bad_block(&self) -> bool {
         const CUTOFF: u8 = 240;
 

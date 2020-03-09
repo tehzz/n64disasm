@@ -17,14 +17,14 @@ pub enum JumpKind {
 }
 
 impl JumpKind {
-    pub fn is_jrra(&self) -> bool {
+    pub fn is_jrra(self) -> bool {
         match self {
             Self::JumpRegister(r) => r.0 as u32 == MIPS_REG_RA,
             _ => false,
         }
     }
 
-    pub fn is_jal(&self) -> bool {
+    pub fn is_jal(self) -> bool {
         match self {
             Self::JAL(_) => true,
             _ => false,
