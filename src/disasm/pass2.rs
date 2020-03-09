@@ -1,5 +1,6 @@
 mod bss;
 mod data;
+mod symbols;
 mod text;
 
 use crate::disasm::{
@@ -40,7 +41,7 @@ pub enum Pass2Error {
 type P2Result<T> = Result<T, Pass2Error>;
 type Wtr = BufWriter<File>;
 
-const ASM_INCLUDE_MACROS: &'static str = include_str!("pass2/inc/macros.inc");
+const ASM_INCLUDE_MACROS: &str = include_str!("pass2/inc/macros.inc");
 
 struct Memory {
     memory_map: MemoryMap,
@@ -68,7 +69,12 @@ pub fn pass2(p1result: Pass1, rom: &[u8], out: &Path) -> P2Result<()> {
     fs::write(&macro_path, ASM_INCLUDE_MACROS).map_err(E::MacroInc)?;
 
     let nf_syms = out.join("not-found-sym.ld");
-    write_notfound_symbols(&nf_syms, &info.not_found_labels).map_err(E::NFSym)?;
+    write_symbols_ldscript(
+        &nf_syms,
+        &info.not_found_labels,
+        "Symbols that couldn't be found",
+    )
+    .map_err(E::NFSym)?;
 
     blocks
         .into_par_iter()
@@ -77,12 +83,12 @@ pub fn pass2(p1result: Pass1, rom: &[u8], out: &Path) -> P2Result<()> {
     todo!()
 }
 
-fn write_notfound_symbols(p: &Path, syms: &HashMap<u32, Label>) -> io::Result<()> {
+fn write_symbols_ldscript(p: &Path, syms: &HashMap<u32, Label>, com: &str) -> io::Result<()> {
     let mut f = BufWriter::new(File::create(p)?);
     let mut sorted_syms = syms.values().collect::<Vec<_>>();
     sorted_syms.sort_unstable_by(lower_addr);
 
-    writeln!(&mut f, "/* Unknown Symbols */\n")?;
+    writeln!(&mut f, "/* {} */\n", com)?;
     for label in sorted_syms {
         writeln!(&mut f, "{} = {:#08X};", label, label.addr)?;
     }
@@ -111,15 +117,16 @@ fn write_block(block: BlockInsn, info: &Memory, rom: &[u8], out: &Path) -> P2Res
 
     let out_base = block_output_dir(out, name_str);
     fs::create_dir_all(&out_base).map_err(|e| E::BlockOut(name.clone(), e))?;
+    let make_file = |s| make_file(&out_base, &name_os, s);
 
     let raw_bin = make_path(&out_base, &name_os, ".raw.bin");
     fs::write(&raw_bin, raw_data)?;
 
-    let mut asm_file = make_file(&out_base, &name_os, ".text.s")?;
+    let mut asm_file = make_file(".text.s")?;
     text::write_block_asm(&mut asm_file, &block, &text_sections, &info)
         .map_err(|e| E::AsmError(name.clone(), e))?;
 
-    let mut data_file = make_file(&out_base, &name_os, ".data.s")?;
+    let mut data_file = make_file(".data.s")?;
     let bin_filename = raw_bin.file_name().expect("valid file").to_string_lossy();
     data::write_block_data(
         &mut data_file,
@@ -131,8 +138,10 @@ fn write_block(block: BlockInsn, info: &Memory, rom: &[u8], out: &Path) -> P2Res
     )
     .map_err(|e| E::DataError(name.clone(), e))?;
 
-    let mut bss_file = make_file(&out_base, &name_os, ".bss.s")?;
+    let mut bss_file = make_file(".bss.s")?;
     bss::write_block_bss(&mut bss_file, &bss_labels, block_info)?;
+
+    symbols::write_symbols(&block, info, make_file)?;
 
     Ok(())
 }

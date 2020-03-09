@@ -1,7 +1,7 @@
 use crate::disasm::{labels::Label, memmap::CodeBlock, pass2::Wtr};
 use std::io::{self, Write};
 
-const BSS_FILE_PRELUDE: &'static str = include_str!("inc/prelude.bss.s");
+const BSS_FILE_PRELUDE: &str = include_str!("inc/prelude.bss.s");
 
 /// Write out a block's BSS labels as a GNU as file.
 /// Note that the `labels` slice needs to be sorted

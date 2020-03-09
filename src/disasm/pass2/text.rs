@@ -33,7 +33,7 @@ pub enum AsmWriteError {
     BadLS(Instruction),
 }
 
-const ASM_FILE_PRELUDE: &'static str = include_str!("inc/prelude.text.s");
+const ASM_FILE_PRELUDE: &str = include_str!("inc/prelude.text.s");
 
 pub(super) fn write_block_asm(
     wtr: &mut Wtr,
@@ -54,7 +54,7 @@ pub(super) fn write_block_asm(
     for sec in text_sections.as_slice() {
         writeln!(wtr, "#  {:#08X} -> {:#08X}", sec.range.start, sec.range.end)?;
     }
-    writeln!(wtr, "")?;
+    writeln!(wtr)?;
 
     let mut cur_section: Option<&LoadSectionInfo> = None;
     let mut hidden;
@@ -105,7 +105,7 @@ pub(super) fn write_block_asm(
             _ => Err(InsnLabel(insn.clone()))?,
         }
 
-        writeln!(wtr, "")?;
+        writeln!(wtr)?;
     }
 
     Ok(())

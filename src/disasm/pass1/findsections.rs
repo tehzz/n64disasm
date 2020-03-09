@@ -351,8 +351,8 @@ impl From<(&TextEndInfo, u32)> for FindFileEnd {
                     vec![(f..j, KnownBreak), (j..text_end, AfterJrra)]
                 }
             }
-            (Some(j), None) => vec![((start(j)..text_end, AfterJrra))],
-            (None, Some(f)) => vec![((start(f)..text_end, KnownBreak))],
+            (Some(j), None) => vec![(start(j)..text_end, AfterJrra)],
+            (None, Some(f)) => vec![(start(f)..text_end, KnownBreak)],
             (None, None) => vec![],
         };
 

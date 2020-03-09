@@ -173,9 +173,9 @@ impl<'a, 'rom> FindDataIter<'a, 'rom> {
         }
 
         let vram = if use_mempak {
-            0x80000400..0x80800000
+            0x8000_0400..0x8080_0000
         } else {
-            0x80000400..0x80400000
+            0x8000_0400..0x8040_0000
         };
 
         let known = known.map(|m| {

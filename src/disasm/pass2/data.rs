@@ -33,7 +33,7 @@ pub enum DataWriteErr {
 type DResult<T> = Result<T, DataWriteErr>;
 type DataMap<'r> = BTreeMap<u32, DataEntry<'r>>;
 
-const DATA_FILE_PRELUDE: &'static str = include_str!("inc/prelude.data.s");
+const DATA_FILE_PRELUDE: &str = include_str!("inc/prelude.data.s");
 
 pub(super) fn write_block_data(
     f: &mut Wtr,
@@ -62,7 +62,7 @@ pub(super) fn write_block_data(
     for sec in sections.as_slice() {
         writeln!(f, "#  {:08X} -> {:08X}", sec.range.start, sec.range.end)?;
     }
-    writeln!(f, "")?;
+    writeln!(f)?;
 
     let combined = combine_labels_data(labels, block_data);
     //for pair in &combined {
@@ -185,7 +185,7 @@ where
 }
 
 fn write_glabel(f: &mut Wtr, label: &Label) -> io::Result<()> {
-    writeln!(f, "")?;
+    writeln!(f)?;
     writeln!(f, "glabel {}", label)
 }
 
@@ -262,7 +262,7 @@ where
             .unwrap_or_else(|| write!(f, ".4byte {:#08X} # Error: missing label", ptr)),
         JmpTbl(..) => unreachable!("all jump tables should be converted to pointers"),
     }?;
-    writeln!(f, "")?;
+    writeln!(f)?;
 
     if is_asciz(entry) {
         writeln!(f, "{:2}{:23}.balign 4", "", "")?;
