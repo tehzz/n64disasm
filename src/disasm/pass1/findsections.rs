@@ -5,7 +5,7 @@ use crate::disasm::{
     memmap::{CodeBlock, Section},
     pass1::FileBreak,
 };
-use log::debug;
+use log::{debug, log_enabled, trace, Level::Trace};
 use std::cmp::Ordering;
 use std::num::NonZeroU32;
 use std::ops::Range;
@@ -226,7 +226,7 @@ impl<'a> FindSectionState<'a> {
     }
 
     fn end_text_block(&self, text: Range<u32>, data_end: u32) -> Transition {
-        println!("Ending a .text section in block {}", &self.block.name);
+        debug!("Ending a .text section in block {}", &self.block.name);
 
         Transition::TextToData(TextEndInfo {
             text,
@@ -276,19 +276,12 @@ fn get_text_data_sections(
 
         find_end.check_instructions(relevant_insns);
 
-        debug!("{:4}{:#x?}", "", &find_end);
+        trace!("{:4}{:#x?}", "", &find_end);
     }
 
     let start = info.text.start;
-    let old_end = info.text.end;
     let data_end = info.data_end;
     let new_end = find_end.find_text_boundry();
-    println!(
-        "Old .text end {:x} == New .text end {:x}? {}",
-        old_end,
-        new_end,
-        old_end == new_end
-    );
 
     let text = LoadSectionInfo::text(start..new_end);
     let data = LoadSectionInfo::data(new_end..data_end);
@@ -396,10 +389,11 @@ impl FindFileEnd {
             let issue = check_bad_insn(insn);
             let update_issue = |m| Malformed::update(m, insn.vaddr, issue);
 
-            if let Some(bad) = issue {
-                if bad == MalKinds::IllegalInsn {
-                    debug!("{:2} Found {:?} instruction", "", &bad);
-                    debug!("{:2} {:x?}", "", &insn);
+            if log_enabled!(Trace) {
+                if let Some(bad) = issue {
+                    if bad == MalKinds::IllegalInsn {
+                        trace!("{:2} Found illegal insn {:x?}", "", &insn);
+                    }
                 }
             }
 

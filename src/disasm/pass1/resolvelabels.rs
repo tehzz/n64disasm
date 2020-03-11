@@ -295,16 +295,15 @@ fn pass1_external_labels<'a, 'r>(
         let (mut proc_block, external_labels) = block.into_proc_block();
         let block_name = &proc_block.info.name;
 
-        info!("First pass on external labels for {}", &block_name);
         info!(
-            "{:4}Started with {} external labels",
-            "",
-            &external_labels.len()
+            "First pass on external labels <{}> for {}",
+            external_labels.len(),
+            &block_name
         );
         for (addr, mut label) in external_labels {
             match memory_map.get_addr_location(addr, block_name) {
                 NotFound => {
-                    info!("{:8}Couldn't find label in memory: {:x?}", "", &label);
+                    debug!("{:8}Couldn't find label in memory: {:x?}", "", &label);
                     proc_block
                         .label_loc_cache
                         .insert(addr, LabelPlace::NotFound);
@@ -366,8 +365,8 @@ fn pass1_external_labels<'a, 'r>(
         let notfound = proc_block.unresolved.not_found.as_ref().map_or(0, Vec::len);
 
         info!(
-            "{:4}Ended with {} unresovled labels and {} not found labels",
-            "", unres, notfound
+            "{:4}Ended with {} unresovled labels and {} not found labels in {}",
+            "", unres, notfound, block_name
         );
 
         output.push(proc_block);

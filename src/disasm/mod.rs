@@ -38,6 +38,7 @@ pub fn disasm_all(config: Config, opts: Opts) -> Result<(), DisasmError> {
         rom,
         outdir,
         config: config_path,
+        ..
     } = opts;
 
     let rom = fs::read(&rom).map_err(E::Rom)?;
