@@ -255,6 +255,7 @@ fn insert_parsed_data_entry<'rom>(
             (Float(..), _) => false,
             (Double(..), _) => false,
             _ => true,
+            // TODO: local branch to subroutine if found stored?
         };
         if replace {
             ls.data.insert(entry.addr, entry);
