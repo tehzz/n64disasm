@@ -249,6 +249,11 @@ fn add_internal_labels_to_set<'a, 'r>(
         |mut acc: ExBlockAccum<'a, 'r>,
          (extrn_block, sections, internal_labels): LabeledBlockComponents<'a, 'r>| {
             let block_name = &extrn_block.info.name;
+            info!(
+                "Found {} internal labels in {}",
+                internal_labels.len(),
+                block_name
+            );
 
             // All internal `Label`s have their block name set; this only
             // needs to be changed for the global labels:

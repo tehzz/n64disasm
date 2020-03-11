@@ -27,6 +27,7 @@ pub enum RawLabel {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all(deserialize = "kebab-case"))]
 struct RawConfig {
+    expak: bool,
     static_code: Vec<RawCodeBlock>,
     base_overlays: Vec<RawCodeBlock>,
     overlays: Vec<RawCodeBlock>,
@@ -40,6 +41,8 @@ pub struct Config {
     pub memory: MemoryMap,
     /// Set of labels from config file, sorted into global and overlayed bins
     pub labels: LabelSet,
+    /// Does the game use the expansion pak
+    pub expak: bool,
 }
 
 #[derive(Debug, Error)]
@@ -57,6 +60,7 @@ pub enum ConfigParseError {
 pub fn parse_config(p: &Path) -> Result<Config, ConfigParseError> {
     let f = File::open(p)?;
     let RawConfig {
+        expak,
         static_code,
         base_overlays,
         overlays,
@@ -72,7 +76,11 @@ pub fn parse_config(p: &Path) -> Result<Config, ConfigParseError> {
     let memory = MemoryMap::from_config_parts(blocks_iter, total_blocks, overlay_sets)?;
     let labels = LabelSet::from_config(labels, &memory.overlays)?;
 
-    Ok(Config { memory, labels })
+    Ok(Config {
+        memory,
+        labels,
+        expak,
+    })
 }
 
 fn make_block_iter(raw: Vec<RawCodeBlock>, kind: BlockKind) -> impl Iterator<Item = CodeBlock> {

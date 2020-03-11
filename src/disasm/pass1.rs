@@ -89,10 +89,11 @@ pub fn pass1(config: Config, rom: &[u8]) -> P1Result<Pass1> {
     let Config {
         memory: memory_map,
         labels: mut existing_labels,
+        expak,
     } = config;
 
     let read_rom = |block| read_codeblock(block, &rom);
-    let proc_insns = |res| process_block(res, &existing_labels);
+    let proc_insns = |res| process_block(res, &existing_labels, expak);
 
     let labeled_blocks = memory_map
         .blocks
@@ -126,6 +127,7 @@ fn read_codeblock<'a, 'b>(block: &'a CodeBlock, rom: &'b [u8]) -> (&'a CodeBlock
 fn process_block<'a, 'rom>(
     (block, buf): (&'a CodeBlock, &'rom [u8]),
     labels: &'_ LabelSet,
+    expak: bool,
 ) -> P1Result<LabeledBlock<'a, 'rom>> {
     let cs = csutil::get_instance()?;
     let block_vaddr = block.range.get_ram_start() as u64;
@@ -156,7 +158,7 @@ fn process_block<'a, 'rom>(
 
     let loaded_sections = section_state.finish(&instructions);
     label_state.ensure_internal_label_section(&loaded_sections);
-    label_state.add_data_labels(&loaded_sections);
+    label_state.find_and_add_data(&loaded_sections, expak);
 
     let LabelState {
         internals: internal_labels,

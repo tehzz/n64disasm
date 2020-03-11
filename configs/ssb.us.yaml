@@ -2,6 +2,9 @@
 # All names need to be valid GAS symbols (doesn't start with number, ascii, no spaces)
 
 ---
+# Does the game use the expansion pak, or not. This is used to find pointer in .data
+expak: false
+
 # Always loaded code that is never overlayed
 static-code:
   #                                                BSS values are optional

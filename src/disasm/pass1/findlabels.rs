@@ -101,7 +101,9 @@ impl<'a, 'rom> LabelState<'a, 'rom> {
             .for_each(|(label, section)| label.update_kind(section));
     }
 
-    pub fn add_data_labels(&mut self, sections: &BlockLoadedSections) {
+    /// Check through the found .data sections to see if there are any string, pointers,
+    /// or jump tables. If so, parse that data and add labels to that data (if needed)
+    pub fn find_and_add_data(&mut self, sections: &BlockLoadedSections, expak: bool) {
         let block_vram_start = self.range.get_ram_start() as u32;
         for sec in sections.iter_data() {
             let start_vram = sec.range.start;
@@ -109,8 +111,8 @@ impl<'a, 'rom> LabelState<'a, 'rom> {
             let end_idx = (sec.range.end - block_vram_start) as usize;
             let data_buf = &self.rom[start_idx..end_idx];
             let known = Some(&self.data);
-            // TODO: put +/- expansion pak into config
-            let parsed_iter = FindDataIter::new(data_buf, start_vram, sections, false, known)
+
+            let parsed_iter = FindDataIter::new(data_buf, start_vram, sections, expak, known)
                 .expect("valid data section");
 
             parsed_iter.for_each(|res| {
