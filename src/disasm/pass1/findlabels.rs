@@ -163,6 +163,10 @@ impl<'a, 'rom> LabelState<'a, 'rom> {
     fn insert_data(&mut self, addr: u32) {
         self.insert_address(addr, Label::data);
     }
+    fn insert_jmptbl(&mut self, addr: u32) {
+        // replace any existing labels with a jumptable label
+        self.insert_local_address(addr, Label::jmp_tbl, |_, _| true);
+    }
     fn insert_float(&mut self, addr: u32) {
         self.insert_address(addr, Label::data);
 
@@ -241,13 +245,13 @@ fn insert_parsed_data_entry<'rom>(
     match &entry.data {
         Float(..) => return ls.insert_float(entry.addr),
         Double(..) => return ls.insert_double(entry.addr),
-        JmpTbl(..) => ls.insert_data(entry.addr),
+        JmpTbl(..) => ls.insert_jmptbl(entry.addr),
         Asciz(..) | Ptr(..) => (),
     };
     // add any "sub-labels" passed on parsed data
     match &entry.data {
         Ptr(ptr) => insert_unk_ptr(ls, *ptr, secs),
-        JmpTbl(ts) => insert_jmptbl_labels(ls, ts),
+        JmpTbl(ts) => insert_jmptbl_targets(ls, ts),
         Asciz(..) => (),
         Float(..) | Double(..) => unreachable!(),
     }
@@ -257,7 +261,7 @@ fn insert_parsed_data_entry<'rom>(
             (Float(..), _) => false,
             (Double(..), _) => false,
             _ => true,
-            // TODO: local branch to subroutine if found stored?
+            // local branch to data?
         };
         if replace {
             ls.data.insert(entry.addr, entry);
@@ -276,6 +280,7 @@ fn insert_parsed_data_entry<'rom>(
 fn insert_unk_ptr(ls: &mut LabelState, ptr: u32, sections: &BlockLoadedSections) {
     let section = sections.find_address(ptr).map(|s| s.kind);
 
+    // TODO: local branch to subroutine if found stored? (cf .4byte .L)
     match section {
         Some(Section::Text) => ls.insert_subroutine(ptr),
         // Either Section::Data, bss, or external
@@ -283,7 +288,7 @@ fn insert_unk_ptr(ls: &mut LabelState, ptr: u32, sections: &BlockLoadedSections)
     }
 }
 
-fn insert_jmptbl_labels(ls: &mut LabelState, targets: &[u32]) {
+fn insert_jmptbl_targets(ls: &mut LabelState, targets: &[u32]) {
     for &target in targets {
         ls.insert_local_address(target, Label::jmp_target, |ls, addr| {
             ls.internals
@@ -293,7 +298,7 @@ fn insert_jmptbl_labels(ls: &mut LabelState, targets: &[u32]) {
     }
 }
 
-/// Store the actual labels of a jump table as individual pointers
+/// Store the actual found pointers of a jump table as individual parsed pointers.
 /// so that labels/pointers to the jump table entries can be easily printed
 fn store_jmbtbl_as_ptrs(ls: &mut LabelState, targets: &[u32], start: u32) {
     targets

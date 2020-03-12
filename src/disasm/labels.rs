@@ -88,35 +88,28 @@ impl Label {
         }
     }
 
+    // constructors
     pub fn local(addr: u32, ovl: Option<&BlockName>) -> Self {
-        Self {
-            addr,
-            kind: LabelKind::Local,
-            location: ovl.into(),
-        }
+        Label::from_kind(addr, ovl, LabelKind::Local)
     }
-
     pub fn routine(addr: u32, ovl: Option<&BlockName>) -> Self {
-        Self {
-            addr,
-            kind: LabelKind::Routine,
-            location: ovl.into(),
-        }
+        Label::from_kind(addr, ovl, LabelKind::Routine)
     }
-
+    pub fn jmp_tbl(addr: u32, ovl: Option<&BlockName>) -> Self {
+        Label::from_kind(addr, ovl, LabelKind::JmpTbl)
+    }
     pub fn jmp_target(addr: u32, ovl: Option<&BlockName>) -> Self {
-        Self {
-            addr,
-            kind: LabelKind::JmpTarget,
-            location: ovl.into(),
-        }
+        Label::from_kind(addr, ovl, LabelKind::JmpTarget)
+    }
+    pub fn data(addr: u32, ovl: Option<&BlockName>) -> Self {
+        Label::from_kind(addr, ovl, LabelKind::Data)
     }
 
-    pub fn data(addr: u32, ovl: Option<&BlockName>) -> Self {
+    fn from_kind(addr: u32, o: Option<&BlockName>, kind: LabelKind) -> Self {
         Self {
             addr,
-            kind: LabelKind::Data,
-            location: ovl.into(),
+            kind,
+            location: o.into(),
         }
     }
 
@@ -131,9 +124,11 @@ impl Label {
                 trace!("{:4}Update label kind to Text: {:x?}", "", &self);
                 self.kind = LabelKind::Routine;
             }
-            // (Section::Data, LabelKind::Local) => Probably a branch target of a data word
-            //          improperly parsed by capstone as an instruction. Leave these alone
-
+            // Data improperly parsed by capstone as a branch instruction
+            (Section::Data, LabelKind::Local) => {
+                trace!("{:4}Update Local label to Data: {:x?}", "", &self);
+                self.kind = LabelKind::Data;
+            }
             // Other sections aren't important for updating
             _ => (),
         }
