@@ -255,7 +255,7 @@ dependencies = [
 
 [[package]]
 name = "n64disasm"
-version = "0.1.0"
+version = "0.9.0"
 dependencies = [
  "arrayvec 0.5.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "capstone 0.6.0 (registry+https://github.com/rust-lang/crates.io-index)",

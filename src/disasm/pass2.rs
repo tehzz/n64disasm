@@ -78,9 +78,7 @@ pub fn pass2(p1result: Pass1, rom: &[u8], out: &Path) -> P2Result<()> {
 
     blocks
         .into_par_iter()
-        .try_for_each(|block| write_block(block, &info, &rom, &out))?;
-
-    todo!()
+        .try_for_each(|block| write_block(block, &info, &rom, &out))
 }
 
 fn write_symbols_ldscript(p: &Path, syms: &HashMap<u32, Label>, com: &str) -> io::Result<()> {
