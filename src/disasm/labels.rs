@@ -11,6 +11,8 @@ pub enum LabelKind {
     Local,
     // subroutine start, typically
     Routine,
+    // start of a jump table
+    JmpTbl,
     // pointer to instructions in a jump table
     JmpTarget,
     // a pointer to some sort of data (.data, .rodata, .bss)
@@ -83,14 +85,6 @@ impl Label {
         match self.kind {
             LabelKind::Named(_) => true,
             _ => false,
-        }
-    }
-
-    pub fn is_data(&self) -> bool {
-        use LabelKind::*;
-        match self.kind {
-            Data => true,
-            Local | Routine | JmpTarget | Named(..) => false,
         }
     }
 
@@ -172,6 +166,7 @@ impl fmt::Display for Label {
         match self.kind {
             Routine => write!(f, "func"),
             Data => write!(f, "D"),
+            JmpTbl => write!(f, "jtbl"),
             JmpTarget => write!(f, "L_JMP"),
             Local => return write!(f, ".L{:08X}", self.addr),
             Named(ref name) => return f.write_str(&name),
