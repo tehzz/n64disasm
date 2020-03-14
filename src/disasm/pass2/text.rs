@@ -83,8 +83,9 @@ pub(super) fn write_block_asm(
             write!(wtr, "{}", hidden)?;
             match label.kind {
                 Local => writeln!(wtr, "{:2}{}:", "", &label)?,
-                Routine | JmpTarget | Named(..) => writeln!(wtr, "glabel {}", &label)?,
-                Data => writeln!(wtr, "glabel {}   # Routine parsed as data", &label)?,
+                Routine | Named(..) => writeln!(wtr, "glabel {}", &label)?,
+                JmpTarget => writeln!(wtr, "{:2}glabel {}", "", &label)?,
+                Data | JmpTbl => writeln!(wtr, "glabel {}   # Routine parsed as data", &label)?,
             }
         }
 

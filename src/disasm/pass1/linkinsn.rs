@@ -219,8 +219,7 @@ fn generate_insn_links(state: &mut LinkState, insn: &Instruction, offset: usize)
                 .ok_or_else(|| MissingInsnComponent(insn.clone(), "mtc1 source reg"))?;
 
             if src.0 as u32 == MIPS_REG_ZERO {
-                let mtc1_zero = Float(Link::new(0, offset));
-                return Ok(Some(mtc1_zero.into_iter().chain(Empty)));
+                return Ok(None);
             }
 
             Ok(reg_state.get_mut(&src).and_then(|state| match *state {

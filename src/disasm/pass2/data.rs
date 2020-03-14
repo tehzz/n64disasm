@@ -51,7 +51,7 @@ pub(super) fn write_block_data(
     let block_data = &block.parsed_data;
 
     let info = OutputInfo {
-        bin: &raw_bin,
+        raw_bin,
         ram_to_block_idx: block_ram_start,
     };
     let find_label = |addr| pass2::find_label(mem, block, addr);
@@ -65,11 +65,6 @@ pub(super) fn write_block_data(
     writeln!(f)?;
 
     let combined = combine_labels_data(labels, block_data);
-    //for pair in &combined {
-    //    writeln!(f, "# {:x?}", pair)?;
-    //}
-    //writeln!(f, "#####")?;
-
     combined
         .windows(2)
         .map(|p| TryInto::<&[Paired; 2]>::try_into(p).unwrap())
@@ -80,13 +75,13 @@ pub(super) fn write_block_data(
 
 #[derive(Debug, Copy, Clone)]
 struct OutputInfo<'a> {
-    bin: &'a str,
+    raw_bin: &'a str,
     ram_to_block_idx: u32,
 }
 
 #[derive(Debug, Copy, Clone)]
-struct SizedPaired<'a, 'r, 'p> {
-    paired: &'p Paired<'a, 'r>,
+struct SizedPaired<'a, 'r> {
+    paired: Paired<'a, 'r>,
     size: u32,
 }
 
@@ -109,10 +104,10 @@ impl<'a, 'r> Paired<'a, 'r> {
 
 /// calc the size in bytes between where cur is and next while also taking into
 /// account breaks between sections
-fn size_pair<'a, 'r, 'p>(
-    [cur, next]: &'p [Paired<'a, 'r>; 2],
+fn size_pair<'a, 'r>(
+    [cur, next]: &[Paired<'a, 'r>; 2],
     sections: &BlockLoadedSections,
-) -> DResult<SizedPaired<'a, 'r, 'p>> {
+) -> DResult<SizedPaired<'a, 'r>> {
     use DataWriteErr::{BadEnd, BadPair};
 
     let cur_sec = get_sec(cur.addr(), sections)?;
@@ -124,19 +119,22 @@ fn size_pair<'a, 'r, 'p>(
         diff_size(cur.addr(), next.addr(), BadPair)
     }?;
 
-    Ok(SizedPaired { paired: cur, size })
+    Ok(SizedPaired { paired: *cur, size })
 }
 
-fn size_final<'a, 'r, 'p>(
-    last: Option<&'p Paired<'a, 'r>>,
+fn size_final<'a, 'r>(
+    last: Option<&Paired<'a, 'r>>,
     sections: &BlockLoadedSections,
-) -> Option<DResult<SizedPaired<'a, 'r, 'p>>> {
+) -> Option<DResult<SizedPaired<'a, 'r>>> {
     use DataWriteErr::BadEnd;
 
     last.map(|last| {
         get_sec(last.addr(), sections)
             .and_then(|s| diff_size(last.addr(), s.range.end, BadEnd))
-            .map(|size| SizedPaired { paired: last, size })
+            .map(|size| SizedPaired {
+                paired: *last,
+                size,
+            })
     })
 }
 
@@ -193,7 +191,7 @@ fn write_incbin(f: &mut Wtr, info: OutputInfo, offset: u32, size: u32) -> io::Re
     writeln!(
         f,
         "{:2}.incbin \"{}\", {:#06X}, {:#X}",
-        "", info.bin, offset, size
+        "", info.raw_bin, offset, size
     )
 }
 

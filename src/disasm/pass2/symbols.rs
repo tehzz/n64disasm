@@ -143,7 +143,7 @@ where
 fn write_extern_globals(f: &mut Wtr, sorted: &SortedAcc<'_>, name: &str) -> io::Result<()> {
     writeln!(f, "/* External Global Symbols in {} */", name)?;
     for (addr, label) in sorted.g.iter() {
-        writeln!(f, "{:4}{} = {:#08X}", "", label, addr)?;
+        writeln!(f, "{:4}{} = {:#08X};", "", label, addr)?;
     }
     writeln!(f)?;
 
@@ -156,7 +156,7 @@ fn write_extern_overlayed(f: &mut Wtr, sorted: &SortedAcc<'_>, name: &str) -> io
     for (ovl, labels) in sorted.ovl.iter() {
         writeln!(f, "/* {} */", ovl)?;
         for (addr, label) in labels.iter() {
-            writeln!(f, "{:4}{} = {:#08X}", "", label, addr)?;
+            writeln!(f, "{:4}{} = {:#08X};", "", label, addr)?;
         }
         writeln!(f)?;
     }

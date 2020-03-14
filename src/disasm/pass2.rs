@@ -111,7 +111,7 @@ fn write_block(block: BlockInsn, info: &Memory, rom: &[u8], out: &Path) -> P2Res
     };
 
     let (text_sections, data_sections) = block.loaded_sections.clone_into_separate();
-    let (data_labels, bss_labels) = separate_and_sort_labels(block_info, block_labels);
+    let (data_labels, bss_labels) = separate_and_sort_labels(&block, block_info, block_labels);
 
     let out_base = block_output_dir(out, name_str);
     fs::create_dir_all(&out_base).map_err(|e| E::BlockOut(name.clone(), e))?;
@@ -162,24 +162,55 @@ fn make_path(dir: &Path, base: &OsStr, ending: &str) -> PathBuf {
 
 /// Separate a block's non-text labels into a sorted .data Vec and a sorted .bss Vec
 fn separate_and_sort_labels<'a>(
+    insn: &BlockInsn,
     block: &CodeBlock,
     block_labels: &'a HashMap<u32, Label>,
 ) -> (Vec<&'a Label>, Vec<&'a Label>) {
     let (mut bss, mut data): (Vec<_>, Vec<_>) = block_labels
         .values()
-        .filter(|l| l.is_data())
-        .filter(|l| block.range.contains(l.addr))
-        .partition(|l| {
-            block
-                .range
-                .section(l.addr)
-                .map_or(false, |s| s == Section::Bss)
+        .filter_map(|l| {
+            get_data_and_bss(l, insn, block)
+                .map(is_bss_not_data)
+                .map(|is_bss| (l, is_bss))
+        })
+        .fold((Vec::new(), Vec::new()), |mut acc, (l, is_bss)| {
+            if is_bss {
+                acc.0.push(l)
+            } else {
+                acc.1.push(l)
+            }
+
+            acc
         });
 
     bss.sort_unstable_by(lower_addr);
     data.sort_unstable_by(lower_addr);
 
     (data, bss)
+}
+
+fn get_data_and_bss(label: &Label, insns: &BlockInsn, block: &CodeBlock) -> Option<Section> {
+    let data_or_bss = |sec| match sec {
+        Section::Bss => Some(sec),
+        Section::Data => Some(sec),
+        Section::Text | Section::TextData => None,
+    };
+
+    // loaded sections has info on .text and .data, while block.range has info on .bss
+    insns
+        .loaded_sections
+        .find_address(label.addr)
+        .map(|s| s.kind)
+        .and_then(data_or_bss)
+        .or_else(|| block.range.section(label.addr).and_then(data_or_bss))
+}
+
+fn is_bss_not_data(sec: Section) -> bool {
+    match sec {
+        Section::Bss => true,
+        Section::Data => false,
+        _ => unreachable!(),
+    }
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref)]
