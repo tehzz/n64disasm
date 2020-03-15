@@ -162,7 +162,7 @@ impl fmt::Display for Label {
             Routine => write!(f, "func"),
             Data => write!(f, "D"),
             JmpTbl => write!(f, "jtbl"),
-            JmpTarget => write!(f, "L_JMP"),
+            JmpTarget => write!(f, "jtgt"),
             Local => return write!(f, ".L{:08X}", self.addr),
             Named(ref name) => return f.write_str(&name),
         }?;
