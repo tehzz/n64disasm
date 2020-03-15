@@ -65,10 +65,15 @@ pub(super) fn write_block_data(
     writeln!(f)?;
 
     let combined = combine_labels_data(labels, block_data);
-    combined
-        .windows(2)
-        .map(|p| TryInto::<&[Paired; 2]>::try_into(p).unwrap())
-        .map(|p| size_pair(p, sections))
+
+    pad_front(combined.first(), sections)
+        .into_iter()
+        .chain(
+            combined
+                .windows(2)
+                .map(|p| TryInto::<&[Paired; 2]>::try_into(p).unwrap())
+                .map(|p| size_pair(p, sections)),
+        )
         .chain(size_final(combined.last(), sections))
         .try_for_each(|sp| write_sized_pair(info, find_label, f, sp))
 }
@@ -87,6 +92,7 @@ struct SizedPaired<'a, 'r> {
 
 #[derive(Debug, Clone, Copy)]
 enum Paired<'a, 'r> {
+    PadAt(u32), // addr
     Both(&'a Label, &'a DataEntry<'r>),
     OnlyLabel(&'a Label),
     OnlyData(&'a DataEntry<'r>),
@@ -95,6 +101,7 @@ enum Paired<'a, 'r> {
 impl<'a, 'r> Paired<'a, 'r> {
     fn addr(&self) -> u32 {
         match self {
+            Self::PadAt(addr) => *addr,
             Self::Both(l, _) => l.addr,
             Self::OnlyLabel(l) => l.addr,
             Self::OnlyData(d) => d.addr,
@@ -120,6 +127,29 @@ fn size_pair<'a, 'r>(
     }?;
 
     Ok(SizedPaired { paired: *cur, size })
+}
+
+/// only add a padding front pair if the first data/label is after the start of the data section
+/// so, ignore any error from `diff_size` as that's probably a zero-sized label
+fn pad_front<'a, 'r>(
+    first: Option<&Paired<'a, 'r>>,
+    sections: &BlockLoadedSections,
+) -> Option<DResult<SizedPaired<'a, 'r>>> {
+    use DataWriteErr::BadEnd;
+
+    first.and_then(|first| {
+        get_sec(first.addr(), sections)
+            .map(|sec| {
+                let start = sec.range.start;
+                diff_size(start, first.addr(), BadEnd)
+                    .ok()
+                    .map(|size| SizedPaired {
+                        paired: Paired::PadAt(start),
+                        size,
+                    })
+            })
+            .transpose()
+    })
 }
 
 fn size_final<'a, 'r>(
@@ -166,6 +196,9 @@ where
     let pair = res?;
     let block_offset = pair.paired.addr() - info.ram_to_block_idx;
     match pair.paired {
+        Paired::PadAt(_) => {
+            write_incbin(f, info, block_offset, pair.size)?;
+        }
         Paired::OnlyLabel(l) => {
             write_glabel(f, l)?;
             write_incbin(f, info, block_offset, pair.size)?;
