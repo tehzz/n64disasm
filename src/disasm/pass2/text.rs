@@ -40,6 +40,7 @@ pub(super) fn write_block_asm(
     block: &BlockInsn,
     text_sections: &BlockLoadedSections,
     mem: &Memory,
+    ram_to_rom: u32,
 ) -> AsmResult<()> {
     use AsmWriteErr::*;
     use JumpKind::*;
@@ -89,10 +90,16 @@ pub(super) fn write_block_asm(
             }
         }
 
-        // `/* vaddr raw */ instruction {ops | jump target | linked value}`
+        // Hide instructions behind a comment if insn found to be incorrectly parsed
         write!(wtr, "{}", hidden)?;
-        write!(wtr, "{:2}/* {:08X} {:08X} */", "", insn.vaddr, insn.raw)?;
-        // pad to 10 chars for `trunc.x.y` instruction
+        // Store ROM, RAM, and raw hex for instruction in a comment before disassembly
+        let rom_addr = insn.vaddr - ram_to_rom;
+        write!(
+            wtr,
+            "{:2}/* {:06X} {:08X} {:08X} */",
+            "", rom_addr, insn.vaddr, insn.raw
+        )?;
+        // pad to 10 chars (`trunc.x.y` as longest instruction)
         write!(wtr, "{:>10} ", &insn.mnemonic)?;
 
         match (insn.jump, insn.linked, insn.op_str.as_ref()) {

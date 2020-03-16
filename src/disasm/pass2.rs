@@ -108,9 +108,10 @@ fn write_block(block: BlockInsn, info: &Memory, rom: &[u8], out: &Path) -> P2Res
         .get_block(name)
         .ok_or_else(|| E::NoBlockInfo(name.clone()))?;
     let block_labels = info.label_set.get_block_map(name);
-    let raw_data = {
+    let (raw_data, ram_to_rom) = {
         let (start, end) = block_info.range.get_rom_offsets();
-        &rom[start..end]
+        let ram_start = block_info.range.get_ram_start();
+        (&rom[start..end], ram_start - start as u32)
     };
 
     let (text_sections, data_sections) = block.loaded_sections.clone_into_separate();
@@ -124,7 +125,7 @@ fn write_block(block: BlockInsn, info: &Memory, rom: &[u8], out: &Path) -> P2Res
     fs::write(&raw_bin, raw_data)?;
 
     let mut asm_file = make_file(".text.s")?;
-    text::write_block_asm(&mut asm_file, &block, &text_sections, &info)
+    text::write_block_asm(&mut asm_file, &block, &text_sections, &info, ram_to_rom)
         .map_err(|e| E::AsmError(name.clone(), e))?;
 
     let mut data_file = make_file(".data.s")?;

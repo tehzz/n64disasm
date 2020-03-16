@@ -29,7 +29,7 @@ pub(super) fn write_block_bss(
     f.write_all(BSS_FILE_PRELUDE.as_bytes())?;
     writeln!(
         f,
-        "# {:#08X} => {:#08X} [{:#x} bytes]",
+        "# {:#08X} -> {:#08X} [{:#x} bytes]",
         start,
         end,
         end - start
