@@ -12,11 +12,11 @@ use err_derive::Error;
 use std::collections::HashMap;
 use std::io::{self, Write};
 
-type AsmResult<T> = Result<T, AsmWriteError>;
+type AsmResult<T> = Result<T, AsmWriteErr>;
 type LabelMap = HashMap<u32, Label>;
 
 #[derive(Debug, Error)]
-pub enum AsmWriteError {
+pub enum AsmWriteErr {
     #[error(display = "Issue writing asm to output")]
     Io(#[error(source)] io::Error),
     #[error(display = "Unknown instruction type for printing: {:x?}", _0)]
@@ -41,7 +41,7 @@ pub(super) fn write_block_asm(
     text_sections: &BlockLoadedSections,
     mem: &Memory,
 ) -> AsmResult<()> {
-    use AsmWriteError::*;
+    use AsmWriteErr::*;
     use JumpKind::*;
     use LabelKind::*;
     use LinkedVal::*;
@@ -118,7 +118,7 @@ fn write_linked_insn(
     mem: &Memory,
     insn: &Instruction,
 ) -> AsmResult<()> {
-    use AsmWriteError::*;
+    use AsmWriteErr::*;
     use LinkedVal::*;
 
     let op = insn
@@ -183,7 +183,7 @@ fn write_embed_ptr<'f>(
 ) -> AsmResult<()> {
     let (dst, base) = insn
         .ls_components()
-        .ok_or_else(|| AsmWriteError::BadLS(insn.clone()))?;
+        .ok_or_else(|| AsmWriteErr::BadLS(insn.clone()))?;
     let val = l.value;
 
     if let Some(label) = find_label(val) {
@@ -195,7 +195,7 @@ fn write_embed_ptr<'f>(
 }
 
 fn write_jump_target(wtr: &mut Wtr, block: &BlockInsn, mem: &Memory, addr: u32) -> AsmResult<()> {
-    use AsmWriteError::*;
+    use AsmWriteErr::*;
     use LabelLoc::*;
 
     let find_ovl_labels = |ovl| mem.label_set.overlays[ovl].get(&addr);
@@ -231,7 +231,7 @@ fn write_jump_target(wtr: &mut Wtr, block: &BlockInsn, mem: &Memory, addr: u32) 
 }
 
 fn write_branch(wtr: &mut Wtr, labels: &LabelMap, addr: u32) -> AsmResult<()> {
-    use AsmWriteError::BranchNotFound;
+    use AsmWriteErr::BranchNotFound;
 
     match find_branch(labels, addr) {
         Ok(target) => write!(wtr, "{}", target).map_err(Into::into),
@@ -243,7 +243,7 @@ fn write_branch(wtr: &mut Wtr, labels: &LabelMap, addr: u32) -> AsmResult<()> {
 }
 
 fn write_b_cmp(wtr: &mut Wtr, labels: &LabelMap, insn: &Instruction, addr: u32) -> AsmResult<()> {
-    use AsmWriteError::{BranchNotFound, MissingOpString};
+    use AsmWriteErr::{BranchNotFound, MissingOpString};
 
     let insn_err = || MissingOpString(insn.clone());
     let full_op = insn.op_str.as_ref().ok_or_else(insn_err)?;
@@ -261,5 +261,5 @@ fn write_b_cmp(wtr: &mut Wtr, labels: &LabelMap, insn: &Instruction, addr: u32) 
 fn find_branch(labels: &LabelMap, addr: u32) -> AsmResult<&Label> {
     labels
         .get(&addr)
-        .ok_or_else(|| AsmWriteError::BranchNotFound(addr))
+        .ok_or_else(|| AsmWriteErr::BranchNotFound(addr))
 }

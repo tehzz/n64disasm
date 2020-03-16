@@ -17,8 +17,9 @@ use std::fs::{self, File};
 use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
+use bss::BssWriteErr;
 use data::DataWriteErr;
-use text::AsmWriteError;
+use text::AsmWriteErr;
 
 #[derive(Debug, Error)]
 pub enum Pass2Error {
@@ -33,9 +34,11 @@ pub enum Pass2Error {
     #[error(display = "Block name <{}> missing information", _0)]
     NoBlockInfo(BlockName),
     #[error(display = "Unable to disassemble asm for {}", _0)]
-    AsmError(BlockName, #[error(source)] AsmWriteError),
+    AsmError(BlockName, #[error(source)] AsmWriteErr),
     #[error(display = "Unable to output data for {}", _0)]
     DataError(BlockName, #[error(source)] DataWriteErr),
+    #[error(display = "Unable to output bss for {}", _0)]
+    BssError(BlockName, #[error(source)] BssWriteErr),
 }
 
 type P2Result<T> = Result<T, Pass2Error>;
@@ -136,8 +139,12 @@ fn write_block(block: BlockInsn, info: &Memory, rom: &[u8], out: &Path) -> P2Res
     )
     .map_err(|e| E::DataError(name.clone(), e))?;
 
-    let mut bss_file = make_file(".bss.s")?;
-    bss::write_block_bss(&mut bss_file, &bss_labels, block_info)?;
+    if block_info.range.get_bss().is_some() {
+        let mut bss_file = make_file(".bss.s")?;
+        bss::write_block_bss(&mut bss_file, &bss_labels, block_info)
+            .map_err(|e| E::BssError(name.clone(), e))?;
+        //todo generalize error map fn
+    }
 
     symbols::write_symbols(&block, &block_info.range, info, make_file)?;
 
