@@ -144,7 +144,6 @@ fn write_block(block: BlockInsn, info: &Memory, rom: &[u8], out: &Path) -> P2Res
         let mut bss_file = make_file(".bss.s")?;
         bss::write_block_bss(&mut bss_file, &bss_labels, block_info)
             .map_err(|e| E::BssError(name.clone(), e))?;
-        //todo generalize error map fn
     }
 
     symbols::write_symbols(&block, &block_info.range, info, make_file)?;
