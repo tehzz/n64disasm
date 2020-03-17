@@ -43,16 +43,18 @@ pub(super) fn write_block_data(
     block: &BlockInsn,
     mem: &Memory,
 ) -> DResult<()> {
-    let block_ram_start = mem
+    let block_info = mem
         .memory_map
         .get_block(&block.name)
-        .map(|b| b.range.get_ram_start() as u32)
         .ok_or_else(|| DataWriteErr::NoBlock(block.name.clone()))?;
+    let block_ram_start = block_info.range.get_ram_start() as u32;
+    let block_rom_start = block_info.range.get_rom_offsets().0 as u32;
     let block_data = &block.parsed_data;
 
     let info = OutputInfo {
         raw_bin,
         ram_to_block_idx: block_ram_start,
+        ram_to_rom: block_ram_start - block_rom_start,
     };
     let find_label = |addr| pass2::find_label(mem, block, addr);
 
@@ -82,6 +84,7 @@ pub(super) fn write_block_data(
 struct OutputInfo<'a> {
     raw_bin: &'a str,
     ram_to_block_idx: u32,
+    ram_to_rom: u32,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -195,6 +198,7 @@ where
 {
     let pair = res?;
     let block_offset = pair.paired.addr() - info.ram_to_block_idx;
+    let rom_offset = pair.paired.addr() - info.ram_to_rom;
     match pair.paired {
         Paired::PadAt(_) => {
             write_incbin(f, info, block_offset, pair.size)?;
@@ -204,11 +208,11 @@ where
             write_incbin(f, info, block_offset, pair.size)?;
         }
         Paired::OnlyData(d) => {
-            write_parsed_data(f, d, find_label, pair.size, block_offset, info)?;
+            write_parsed_data(f, d, find_label, pair.size, block_offset, rom_offset, info)?;
         }
         Paired::Both(l, d) => {
             write_glabel(f, l)?;
-            write_parsed_data(f, d, find_label, pair.size, block_offset, info)?;
+            write_parsed_data(f, d, find_label, pair.size, block_offset, rom_offset, info)?;
         }
     };
 
@@ -234,6 +238,7 @@ fn write_parsed_data<'a, F>(
     fl: F,
     total_size: u32,
     block_offset: u32,
+    rom_offset: u32,
     info: OutputInfo,
 ) -> DResult<()>
 where
@@ -254,7 +259,7 @@ where
         }
     };
 
-    write_data_entry(f, fl, block_offset, data)?;
+    write_data_entry(f, fl, block_offset, rom_offset, data)?;
     if bytes_left > 0 {
         write_incbin(f, info, block_offset + data_size, bytes_left)?;
     }
@@ -272,6 +277,7 @@ fn write_data_entry<'a, F>(
     f: &mut Wtr,
     find_label: F,
     block_offset: u32,
+    rom_offset: u32,
     entry: &DataEntry,
 ) -> io::Result<()>
 where
@@ -279,11 +285,21 @@ where
 {
     use ParsedData::*;
 
+    let nl_after_comment = match entry.data {
+        Ptr(..) => false,
+        _ => true,
+    };
+
+    /* raw-bin-offset rom-offset, ram-offset */
     write!(
         f,
-        "{:2}/* {:06X} {:08X} */{:2}",
-        "", block_offset, entry.addr, ""
+        "{:2}/* {:X} {:06X} {:08X} */",
+        "", block_offset, rom_offset, entry.addr
     )?;
+    if nl_after_comment {
+        writeln!(f)?;
+    }
+    write!(f, "{:2}", "")?;
     match entry.data {
         Float(..) => write!(f, ".float {}", entry),
         Double(..) => write!(f, ".double {}", entry),
@@ -296,7 +312,7 @@ where
     writeln!(f)?;
 
     if is_asciz(entry) {
-        writeln!(f, "{:2}{:23}.balign 4", "", "")?;
+        writeln!(f, "{:2}.balign 4", "")?;
     }
 
     Ok(())
