@@ -157,6 +157,10 @@ fn process_block<'a, 'rom>(
     } = processed;
 
     let loaded_sections = section_state.finish(&instructions);
+    info!(
+        "Found .text/.data sections in {}\n{:x?}",
+        &block.name, &loaded_sections
+    );
     label_state.ensure_internal_label_section(&loaded_sections);
     label_state.find_and_add_data(&loaded_sections, expak);
 

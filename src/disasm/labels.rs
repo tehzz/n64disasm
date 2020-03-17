@@ -284,18 +284,18 @@ impl fmt::Display for Label {
 }
 
 /// [From the GNU as manual](https://sourceware.org/binutils/docs/as/Symbol-Names.html)
-/// > Symbol names begin with a letter or with one of ‘._’. 
-/// > On most machines, you can also use $ in symbol names; exceptions are noted in Machine Dependencies. 
-/// > That character may be followed by any string of digits, letters, dollar signs 
-/// > (unless otherwise noted for a particular target machine), and underscores. 
-/// > Generating a multibyte symbol name from a label is not currently supported. 
+/// > Symbol names begin with a letter or with one of ‘._’.
+/// > On most machines, you can also use $ in symbol names; exceptions are noted in Machine Dependencies.
+/// > That character may be followed by any string of digits, letters, dollar signs
+/// > (unless otherwise noted for a particular target machine), and underscores.
+/// > Generating a multibyte symbol name from a label is not currently supported.
 fn valid_gas_label(s: &str) -> bool {
     let mut chars = s.chars();
 
     chars.next().map_or(false, check_start_char) && check_label_tail(chars)
 }
-/// since the overlay name will become part of the label, 
-/// it has to follow the not-leading-character label restrictions 
+/// since the overlay name will become part of the label,
+/// it has to follow the not-leading-character label restrictions
 fn valid_gas_overlay(s: &str) -> bool {
     check_label_tail(s.chars())
 }

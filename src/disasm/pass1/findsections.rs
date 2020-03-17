@@ -226,7 +226,10 @@ impl<'a> FindSectionState<'a> {
     }
 
     fn end_text_block(&self, text: Range<u32>, data_end: u32) -> Transition {
-        debug!("Ending a .text section in block {}", &self.block.name);
+        debug!(
+            "Ending a .text section in block {} at {:08x}",
+            &self.block.name, data_end
+        );
 
         Transition::TextToData(TextEndInfo {
             text,

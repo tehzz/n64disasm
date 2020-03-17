@@ -241,6 +241,11 @@ fn insert_parsed_data_entry<'rom>(
     secs: &BlockLoadedSections,
 ) {
     use ParsedData::*;
+    // dont' use this entry if there's an issue
+    if exclude_entry(&entry, secs) {
+        return;
+    }
+
     // add any labels to found data, if necessary
     match &entry.data {
         Float(..) => return ls.insert_float(entry.addr),
@@ -274,6 +279,22 @@ fn insert_parsed_data_entry<'rom>(
             JmpTbl(ts) => store_jmbtbl_as_ptrs(ls, ts, entry.addr),
             Float(..) | Double(..) => unreachable!(),
         };
+    }
+}
+
+fn exclude_entry(entry: &DataEntry<'_>, sections: &BlockLoadedSections) -> bool {
+    use ParsedData::*;
+
+    match entry.data {
+        Ptr(p) => {
+            let sec = sections.find_address(p).map(|s| s.kind);
+            match sec {
+                // exclude any pointers to .text that are not 4 byte aligned
+                Some(Section::Text) => p % 4 != 0,
+                _ => false,
+            }
+        }
+        _ => false,
     }
 }
 
