@@ -1,9 +1,41 @@
+use crate::boolext::BoolOptionExt;
 use crate::config::RawLabel;
 use crate::disasm::memmap::{BlockName, Section};
 use err_derive::Error;
 use log::trace;
 use std::collections::{HashMap, HashSet};
+use std::convert::TryFrom;
 use std::fmt;
+
+#[derive(Debug, Error)]
+pub enum LabelSetErr {
+    #[error(
+        display = r#"Overlay "{}" not listed in config overlays, but it was listed as the overlay for label "{}" ({:#08x})"#,
+        _2,
+        _1,
+        _0
+    )]
+    UnknownOverlay(u32, String, String),
+    #[error(display = "Label \"{}\" is not valid for gas label", _0)]
+    IllegalLabel(String),
+    #[error(display = "Overlay \"{}\" is not valid for gas label", _0)]
+    IllegalOvl(String),
+}
+
+#[derive(Debug)]
+pub struct LabelSet {
+    // Map<Vaddr => Label>
+    pub globals: HashMap<u32, Label>,
+    // Map<Overlay Name => Map<Vaddr => Label>>
+    pub overlays: HashMap<BlockName, HashMap<u32, Label>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Label {
+    pub addr: u32,
+    pub kind: LabelKind,
+    pub location: LabelLoc,
+}
 
 #[derive(Debug, Eq, PartialEq, Clone)]
 pub enum LabelKind {
@@ -45,11 +77,68 @@ impl From<Option<&BlockName>> for LabelLoc {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct Label {
-    pub addr: u32,
-    pub kind: LabelKind,
-    pub location: LabelLoc,
+impl LabelSet {
+    pub fn from_config(raw: Vec<RawLabel>, ovls: &HashSet<BlockName>) -> Result<Self, LabelSetErr> {
+        let ovl_count = ovls.len();
+        // Create maps for global symbols (addr => label)
+        // and for overlay specific symbols (overlay => addr => label)
+        let mut global_labels = HashMap::new();
+        let mut overlays_labels =
+            ovls.iter()
+                .fold(HashMap::with_capacity(ovl_count), |mut map, ovl| {
+                    map.insert(ovl.clone(), HashMap::new());
+                    map
+                });
+
+        for raw_label in raw {
+            match raw_label {
+                RawLabel::Global(..) => {
+                    let mut label = Label::try_from(raw_label)?;
+                    label.set_global();
+                    global_labels.insert(label.addr, label);
+                }
+                RawLabel::Overlayed(addr, ref symbol, ref ovl) => {
+                    let ovl_str = ovl.as_str();
+                    let ovl_labels = overlays_labels.get_mut(ovl_str).ok_or_else(|| {
+                        LabelSetErr::UnknownOverlay(addr, symbol.clone(), ovl.clone())
+                    })?;
+                    let overlay_ref = ovls.get(ovl_str).expect("overlay must exist");
+                    let mut label = Label::try_from(raw_label)?;
+                    label.set_overlay(overlay_ref);
+                    ovl_labels.insert(label.addr, label);
+                }
+            };
+        }
+
+        Ok(Self {
+            globals: global_labels,
+            overlays: overlays_labels,
+        })
+    }
+
+    /// Get the set of labels for `name`. This will be either a specific set
+    /// of overlayed labels or the global set
+    pub fn get_block_map(&self, name: &BlockName) -> &HashMap<u32, Label> {
+        self.overlays.get(name).unwrap_or(&self.globals)
+    }
+}
+
+impl fmt::Display for LabelSet {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        writeln!(f, "Global Labels ({}):", self.globals.len())?;
+        for label in self.globals.values() {
+            writeln!(f, "{:4}{} << {:x?}", "", &label, &label)?;
+        }
+        writeln!(f, "Overlayed Labels:")?;
+        for (block, set) in &self.overlays {
+            writeln!(f, "{:4}{} ({} labels):", "", &block, set.len())?;
+            for label in set.values() {
+                writeln!(f, "{:8}{} << {:x?}", "", &label, &label)?;
+            }
+        }
+
+        Ok(())
+    }
 }
 
 impl Label {
@@ -135,21 +224,34 @@ impl Label {
     }
 }
 
-impl From<RawLabel> for Label {
-    fn from(r: RawLabel) -> Self {
+impl TryFrom<RawLabel> for Label {
+    type Error = LabelSetErr;
+    fn try_from(r: RawLabel) -> Result<Self, Self::Error> {
         use LabelLoc::{Overlayed, Unspecified};
+        use LabelSetErr::{IllegalLabel, IllegalOvl};
 
         let (addr, symbol, location) = match r {
-            RawLabel::Global(a, s) => (a, s, Unspecified),
-            RawLabel::Overlayed(a, s, o) => (a, s, Overlayed(o.into())),
-        };
+            RawLabel::Global(a, s) => valid_gas_label(&s)
+                .b_then(())
+                .ok_or_else(|| IllegalLabel(s.clone()))
+                .map(|_| (a, s, Unspecified)),
+            RawLabel::Overlayed(a, s, o) => {
+                let lres = valid_gas_label(&s)
+                    .b_then(())
+                    .ok_or_else(|| IllegalLabel(s.clone()));
+                let ores = valid_gas_overlay(&o)
+                    .b_then(())
+                    .ok_or_else(|| IllegalOvl(o.clone()));
+                lres.and(ores).map(|_| (a, s, Overlayed(o.into())))
+            }
+        }?;
         let kind = LabelKind::Named(symbol);
 
-        Self {
+        Ok(Self {
             addr,
             kind,
             location,
-        }
+        })
     }
 }
 
@@ -181,87 +283,77 @@ impl fmt::Display for Label {
     }
 }
 
-#[derive(Debug)]
-pub struct LabelSet {
-    // map from vaddr to label
-    pub globals: HashMap<u32, Label>,
-    // for easy search later...?
-    // base_ovl: HashMap<String, HashMap<u32, Label>>,
-    // Map<Overlay Name => Map<Vaddr => Label>>
-    pub overlays: HashMap<BlockName, HashMap<u32, Label>>,
+/// [From the GNU as manual](https://sourceware.org/binutils/docs/as/Symbol-Names.html)
+/// > Symbol names begin with a letter or with one of ‘._’. 
+/// > On most machines, you can also use $ in symbol names; exceptions are noted in Machine Dependencies. 
+/// > That character may be followed by any string of digits, letters, dollar signs 
+/// > (unless otherwise noted for a particular target machine), and underscores. 
+/// > Generating a multibyte symbol name from a label is not currently supported. 
+fn valid_gas_label(s: &str) -> bool {
+    let mut chars = s.chars();
+
+    chars.next().map_or(false, check_start_char) && check_label_tail(chars)
+}
+/// since the overlay name will become part of the label, 
+/// it has to follow the not-leading-character label restrictions 
+fn valid_gas_overlay(s: &str) -> bool {
+    check_label_tail(s.chars())
 }
 
-impl LabelSet {
-    pub fn from_config(raw: Vec<RawLabel>, ovls: &HashSet<BlockName>) -> Result<Self, LabelSetErr> {
-        let ovl_count = ovls.len();
-        // Create maps for global symbols (addr => label)
-        // and for overlay specific symbols (overlay => addr => label)
-        let mut global_labels = HashMap::new();
-        let mut overlays_labels =
-            ovls.iter()
-                .fold(HashMap::with_capacity(ovl_count), |mut map, ovl| {
-                    map.insert(ovl.clone(), HashMap::new());
-                    map
-                });
-
-        for raw_label in raw {
-            match raw_label {
-                RawLabel::Global(..) => {
-                    let mut label = Label::from(raw_label);
-                    label.set_global();
-                    global_labels.insert(label.addr, label);
-                }
-                RawLabel::Overlayed(addr, ref symbol, ref ovl) => {
-                    let ovl_str = ovl.as_str();
-                    let ovl_labels = overlays_labels.get_mut(ovl_str).ok_or_else(|| {
-                        LabelSetErr::UnknownOverlay(addr, symbol.clone(), ovl.clone())
-                    })?;
-                    let overlay_ref = ovls.get(ovl_str).expect("overlay must exist");
-                    let mut label = Label::from(raw_label);
-                    label.set_overlay(overlay_ref);
-                    ovl_labels.insert(label.addr, label);
-                }
-            };
-        }
-
-        Ok(Self {
-            globals: global_labels,
-            overlays: overlays_labels,
-        })
-    }
-
-    /// Get the set of labels for `name`. This will be either a specific set
-    /// of overlayed labels or the global set
-    pub fn get_block_map(&self, name: &BlockName) -> &HashMap<u32, Label> {
-        self.overlays.get(name).unwrap_or(&self.globals)
-    }
+fn check_start_char(c: char) -> bool {
+    c.is_ascii_alphabetic() || c == '_' || c == '.'
 }
 
-impl fmt::Display for LabelSet {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        writeln!(f, "Global Labels ({}):", self.globals.len())?;
-        for label in self.globals.values() {
-            writeln!(f, "{:4}{} << {:x?}", "", &label, &label)?;
-        }
-        writeln!(f, "Overlayed Labels:")?;
-        for (block, set) in &self.overlays {
-            writeln!(f, "{:4}{} ({} labels):", "", &block, set.len())?;
-            for label in set.values() {
-                writeln!(f, "{:8}{} << {:x?}", "", &label, &label)?;
-            }
-        }
-
-        Ok(())
-    }
+fn check_label_tail(mut s_iter: impl Iterator<Item = char>) -> bool {
+    s_iter.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
 }
 
-#[derive(Debug, Error)]
-pub enum LabelSetErr {
-    #[error(
-        display = r#"Overlay "{}" not listed in config overlays, but it was listed as the overlay for label "{}" ({:#08x})"#,
-        _2,
-        _1,
-        _0
-    )]
-    UnknownOverlay(u32, String, String),
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    const VALID_LABELS: &[&str] = &[
+        "snake_case_1",
+        "camelCase",
+        "camelCase0x165",
+        "PascalCase",
+        "with$char",
+        ".local",
+        ".Local",
+        "Local",
+    ];
+
+    const INVALID_LABELS: &[&str] = &[
+        "1_numeric_start",
+        "100",
+        "internal-dash",
+        "-leadDash",
+        "internal.dot",
+        "label?",
+        "?label¿",
+        "multibyte🤬 🤡",
+        "über-lead",
+    ];
+
+    #[test]
+    fn check_valid_gas_labels() {
+        for label in VALID_LABELS.iter() {
+            assert!(
+                valid_gas_label(label),
+                "Valid GAS label {} marked as invalid",
+                label
+            );
+        }
+    }
+
+    #[test]
+    fn check_invalid_gas_labels() {
+        for label in INVALID_LABELS.iter() {
+            assert!(
+                !valid_gas_label(label),
+                "Invalid GAS label {} marked as valid",
+                label
+            );
+        }
+    }
 }
