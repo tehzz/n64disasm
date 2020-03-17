@@ -301,8 +301,8 @@ where
     }
     write!(f, "{:2}", "")?;
     match entry.data {
-        Float(..) => write!(f, ".float {}", entry),
-        Double(..) => write!(f, ".double {}", entry),
+        Float(h) => write!(f, ".4byte {:#08x} # .float {}", h, entry),
+        Double(h) => write!(f, ".8byte {:#16x} # .double {}", h, entry),
         Asciz(s) => write!(f, ".asciz {:?}", s),
         Ptr(ptr) => find_label(ptr)
             .map(|l| write!(f, ".4byte {}", l))

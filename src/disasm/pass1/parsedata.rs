@@ -289,7 +289,7 @@ impl<'a, 'rom> FindDataIter<'a, 'rom> {
         // check that all bytes up to the next word alignment are NUL
         // as IDO aligns string rodata to the nearest word with pad NUL bytes
         let is_aligned_null = str_buffer
-            .get(size..align!(size+1, 4))
+            .get(size..align!(size + 1, 4))
             .map_or(true, |s| s.iter().all(|b| *b == NUL));
         if !is_aligned_null {
             return Event::NothingFound;
