@@ -437,8 +437,16 @@ impl<'rom> fmt::Display for DataEntry<'rom> {
         use ParsedData::*;
 
         match self.data {
-            Float(h) => write!(f, "{}", f32::from_bits(h)),
-            Double(h) => write!(f, "{}", f64::from_bits(h)),
+            Float(h) => {
+                let mut buf = ryu::Buffer::new();
+                let pretty = buf.format(f32::from_bits(h));
+                write!(f, "{}", pretty)
+            }
+            Double(h) => {
+                let mut buf = ryu::Buffer::new();
+                let pretty = buf.format(f64::from_bits(h));
+                write!(f, "{}", pretty)
+            }
             Asciz(s) => write!(f, "{:?}", s),
             JmpTbl(ref t) => write!(f, "{:X?}", t),
             Ptr(p) => write!(f, "{:X?}", p),

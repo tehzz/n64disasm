@@ -163,19 +163,8 @@ fn write_linked_insn(
         PtrOff(l, o) => write_label_offset(wtr, l, o)?,
         Immediate(l) => write!(wtr, "{}, ({v:#X} & 0xFFFF) # {v}", op, v = l.value)?,
         ImmLui(l) => write!(wtr, "{}, ({v:#X} >> 16) # {v}", op, v = l.value)?,
-        Float(l) => write!(
-            wtr,
-            "{}, {:#08X} # {}",
-            op,
-            l.value,
-            f32::from_bits(l.value)
-        )?,
-        FloatLoad(l) => write!(
-            wtr,
-            "{} # moved float {} to cop1",
-            full_op,
-            f32::from_bits(l.value)
-        )?,
+        Float(l) => write_float_imm(wtr, op, l.value)?,
+        FloatLoad(l) => write_float_move(wtr, full_op, l.value)?,
         Empty => unreachable!(),
     };
 
@@ -269,4 +258,18 @@ fn find_branch(labels: &LabelMap, addr: u32) -> AsmResult<&Label> {
     labels
         .get(&addr)
         .ok_or_else(|| AsmWriteErr::BranchNotFound(addr))
+}
+
+fn write_float_imm(wtr: &mut Wtr, op: &str, float_hex: u32) -> io::Result<()> {
+    let mut buf = ryu::Buffer::new();
+    let pretty = buf.format(f32::from_bits(float_hex));
+
+    write!(wtr, "{}, ({:#08X} >> 16) # {}", op, float_hex, pretty)
+}
+
+fn write_float_move(wtr: &mut Wtr, op: &str, float_hex: u32) -> io::Result<()> {
+    let mut buf = ryu::Buffer::new();
+    let pretty = buf.format(f32::from_bits(float_hex));
+
+    write!(wtr, "{} # {} to cop1", op, pretty)
 }
