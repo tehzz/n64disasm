@@ -274,7 +274,7 @@ impl<'a, 'rom> FindDataIter<'a, 'rom> {
         let size = str_buffer
             .iter()
             .copied()
-            .take_while(|&b| valid_ascii(b))
+            .take_while(|&b| useful_ascii(b))
             .count();
 
         if size == 0 {
@@ -289,7 +289,7 @@ impl<'a, 'rom> FindDataIter<'a, 'rom> {
         // check that all bytes up to the next word alignment are NUL
         // as IDO aligns string rodata to the nearest word with pad NUL bytes
         let is_aligned_null = str_buffer
-            .get(size..align!(size, 4))
+            .get(size..align!(size+1, 4))
             .map_or(true, |s| s.iter().all(|b| *b == NUL));
         if !is_aligned_null {
             return Event::NothingFound;
@@ -454,9 +454,9 @@ impl<'rom> fmt::Display for DataEntry<'rom> {
     }
 }
 
-// check if byte is ascii alphanumeric, symbol, or whitespace
-fn valid_ascii(b: u8) -> bool {
-    b.is_ascii() && (b.is_ascii_whitespace() || !b.is_ascii_control())
+// check if byte is ascii alphanumeric, symbol, or ' ', \n, \r, \t
+fn useful_ascii(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b.is_ascii_punctuation() || (b.is_ascii_whitespace() && b != 0x0C)
 }
 
 #[cfg(test)]
@@ -464,19 +464,31 @@ mod test {
     use super::*;
 
     #[test]
-    fn check_valid_ascii() {
-        let valid = [b'a', b'Z', b'0', b'!', b'\n', b' ', b'9', b'%', b'\'', b'~'];
+    fn check_useful_ascii() {
+        let valid = [
+            b'a', b'Z', b'0', b'!', b'\n', b' ', b'9', b'%', b'\'', b'\\', b'~',
+        ];
         let invalid = [
             b'\0', 0x14, 0x01, 0x02, 0x03, 0x4, 0x5, 0x6, 0x7, 0x18, 0x7F,
         ];
+        let valid_ws = [b' ', b'\n', b'\r', b'\n'];
+        let invalid_ws = [0x0C];
 
         assert!(
-            valid.iter().copied().all(valid_ascii),
+            valid.iter().copied().all(useful_ascii),
             "valid ascii read as invalid"
         );
         assert!(
-            invalid.iter().copied().all(|b| !valid_ascii(b)),
+            invalid.iter().copied().all(|b| !useful_ascii(b)),
             "invalid ascii read as valid"
+        );
+        assert!(
+            valid_ws.iter().copied().all(useful_ascii),
+            "valid ascii whitespace read as invalid"
+        );
+        assert!(
+            invalid_ws.iter().copied().all(|b| !useful_ascii(b)),
+            "invalid ascii whitespace read as valid"
         );
     }
 
