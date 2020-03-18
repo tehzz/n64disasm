@@ -45,18 +45,18 @@ fn write_unresolved(
         name
     )?;
     for s in sorted_syms {
-        write!(f, "{:4}{} = {:#08X}", "", s, s.addr)?;
+        write!(f, "{:4}{} = {:#08X}; ", "", s, s.addr)?;
         let mut comma = "";
         match s.location {
             Multiple(ref blocks) => {
-                write!(f, " /* could be: ")?;
+                write!(f, "/* could be: ")?;
                 blocks
                     .iter()
                     .filter_map(|o| find_label_in_ovl(o, s.addr))
                     .try_for_each(|l| write_locations(f, &mut comma, l))
             }
             UnresolvedMultiple(ref blocks) => {
-                write!(f, " /* in ")?;
+                write!(f, "/* in ")?;
                 blocks
                     .iter()
                     .try_for_each(|o| write_locations(f, &mut comma, o))
