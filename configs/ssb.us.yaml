@@ -28,6 +28,7 @@ overlays:
   - [ 0xAC540,  0x1079C0, ovl3,  0x80131B00, 0x8018CF80, 0x8018D0C0 ]
   - [ 0x109FB0, 0x10B370, ovl4,  0x8018D0C0, 0x8018E480, 0x8018E7E0 ]
   - [ 0x10B370, 0x10B920, ovl5,  0x8018D0C0, 0x8018D670, 0x8018D950 ]
+  - [ 0x10B920, 0x111800, ovl65, 0x8018D0C0, 0x80192FA0, 0x80193900 ]
   - [ 0x111800, 0x1138E0, ovl6,  0x8018D0C0, 0x8018F1A0, 0x8018F710 ]
   - [ 0x1138E0, 0x117180, ovl7,  0x8018D0C0, 0x80190960, 0x80190FA0 ]
   - [ 0x18DCB0, 0x1AB6B0, ovl8,  0x80371460, 0x8038EE60, 0x803903E0 ]
@@ -155,6 +156,7 @@ overlay-sets:
   OvlSet59:           [ ovl1, ovl62 ]
   HowToPlay:          [ ovl2, ovl3, ovl63 ]
   DemoBattle:         [ ovl2, ovl3, ovl64 ]
+  OvlSet62:           [ ovl2, ovl3, ovl65 ]
 
 # Global labels for functions based on vram address
 labels:
@@ -339,3 +341,4 @@ labels:
   - [ 0x80133988, overlay_set59_entry, ovl62 ]
   - [ 0x8018e5c0, how_to_play_entry, ovl63 ]
   - [ 0x8018e014, demo_battle_entry, ovl64 ]
+  - [ 0x80190FD8, overlay_set62_entry, ovl65 ]
