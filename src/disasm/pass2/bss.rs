@@ -35,6 +35,16 @@ pub(super) fn write_block_bss(
         end - start
     )?;
 
+    if let Some(first) = labels.first() {
+        if start < first.addr {
+            writeln!(f, "# Unreferenced BSS space @ {:08X}", start)?;
+            writeln!(f, "{:4}.space {}", "", first.addr - start)?;
+        }
+    } else {
+        writeln!(f, "# No references found to BSS")?;
+        writeln!(f, "{:4}.space {}", "", end - start)?;
+    }
+
     let mut prior_label: Option<&Label> = None;
     for label in labels {
         if let Some(prior) = prior_label {
