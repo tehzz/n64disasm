@@ -327,27 +327,39 @@ fn pass1_external_labels<'a, 'r>(
                         .get_or_insert_with(Vec::new)
                         .push(label);
                 }
-                Single(block) => {
-                    let stored_label = if let Some(ovl_labels) = label_set.overlays.get_mut(&block)
-                    {
+                Single(in_block) => {
+                    let label_section = sections[&in_block].find_address(addr);
+                    if let Some(section) = label_section {
+                        label.update_kind(section.kind);
+                    }
+
+                    if label.is_illegal() {
+                        info!(
+                            "Found illegal label from {}, discarding: {:x?}",
+                            &block_name, label
+                        );
+                        continue;
+                    }
+
+                    if let Some(ovl_labels) = label_set.overlays.get_mut(&in_block) {
                         debug!(
                             "{:8}Found single label from '{}' into '{}': {:x?}",
-                            "", &block_name, &block, &label
+                            "", &block_name, &in_block, &label
                         );
                         proc_block
                             .label_loc_cache
-                            .insert(addr, LabelPlace::External(block.clone()));
+                            .insert(addr, LabelPlace::External(in_block.clone()));
 
                         ovl_labels.entry(addr).or_insert_with(|| {
                             debug!("{:10}Label not found; inserted!", "");
-                            label.set_overlay(&block);
+                            label.set_overlay(&in_block);
                             label
-                        })
+                        });
                     } else {
                         // must be a label from a global symbol
                         debug!(
                             "{:8}Found global label from '{}' into '{}': {:x?}",
-                            "", &block_name, &block, &label
+                            "", &block_name, &in_block, &label
                         );
                         proc_block.label_loc_cache.insert(addr, LabelPlace::Global);
 
@@ -355,13 +367,8 @@ fn pass1_external_labels<'a, 'r>(
                             debug!("{:10}Global label not found; inserted!", "");
                             label.set_global();
                             label
-                        })
+                        });
                     };
-
-                    let label_section = sections[&block].find_address(addr);
-                    if let Some(section) = label_section {
-                        stored_label.update_kind(section.kind);
-                    }
                 }
             }
         }

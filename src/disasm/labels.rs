@@ -222,6 +222,15 @@ impl Label {
             _ => (),
         }
     }
+
+    /// Check if an invalid label was created; most often from reading an faux .text pointer
+    /// while parsing data
+    pub fn is_illegal(&self) -> bool {
+        match self.kind {
+            LabelKind::Local | LabelKind::Routine if self.addr % 4 != 0 => true,
+            _ => false,
+        }
+    }
 }
 
 impl TryFrom<RawLabel> for Label {
