@@ -67,6 +67,15 @@ pub(super) fn write_block_data(
     writeln!(f)?;
 
     let combined = combine_labels_data(labels, block_data);
+    if combined.is_empty() {
+        writeln!(f, "# No references to addresses in .data sections")?;
+        for sec in sections.as_slice() {
+            let at = sec.range.start;
+            let size = sec.range.start - sec.range.end;
+            write_incbin(f, info, at, size)?;
+        }
+        return Ok(());
+    }
 
     pad_front(combined.first(), sections)
         .into_iter()
@@ -306,7 +315,7 @@ where
         Asciz(s) => write!(f, ".asciz {:?}", s),
         Ptr(ptr) => find_label(ptr)
             .map(|l| write!(f, ".4byte {}", l))
-            .unwrap_or_else(|| write!(f, ".4byte {:#08X} # Error: missing label", ptr)),
+            .unwrap_or_else(|| write!(f, ".4byte {:#08X} # Warning: missing label", ptr)),
         JmpTbl(..) => unreachable!("all jump tables should be converted to pointers"),
     }?;
     writeln!(f)?;
