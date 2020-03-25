@@ -51,6 +51,8 @@ pub enum LabelKind {
     Data,
     // named label from input config file
     Named(String),
+    // label for a hardware register
+    Hardware(&'static str),
 }
 
 #[derive(Debug, Clone)]
@@ -193,6 +195,13 @@ impl Label {
     pub fn data(addr: u32, ovl: Option<&BlockName>) -> Self {
         Label::from_kind(addr, ovl, LabelKind::Data)
     }
+    pub fn hw(addr: u32, reg: &'static str) -> Self {
+        Self {
+            addr,
+            kind: LabelKind::Hardware(reg),
+            location: LabelLoc::Global,
+        }
+    }
 
     fn from_kind(addr: u32, o: Option<&BlockName>, kind: LabelKind) -> Self {
         Self {
@@ -276,6 +285,7 @@ impl fmt::Display for Label {
             JmpTarget => write!(f, "jtgt"),
             Local => return write!(f, ".L{:08X}", self.addr),
             Named(ref name) => return f.write_str(&name),
+            Hardware(reg) => return f.write_str(reg),
         }?;
 
         // write prefix and address for Routine and Data Labels
@@ -303,7 +313,7 @@ fn valid_gas_label(s: &str) -> bool {
 
     chars.next().map_or(false, check_start_char) && check_label_tail(chars)
 }
-/// since the overlay name will become part of the label,
+/// Since the overlay name will become part of the label,
 /// it has to follow the not-leading-character label restrictions
 fn valid_gas_overlay(s: &str) -> bool {
     check_label_tail(s.chars())

@@ -1,4 +1,5 @@
 mod csutil;
+mod hwreg;
 mod instruction;
 pub mod labels;
 pub mod memmap;

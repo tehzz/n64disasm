@@ -29,6 +29,8 @@ pub enum Pass2Error {
     MacroInc(#[error(source, no_from)] io::Error),
     #[error(display = "Unable to write not-found-sym.ld file")]
     NFSym(#[error(source, no_from)] io::Error),
+    #[error(display = "Unable to write hardware-registers.ld file")]
+    HWSym(#[error(source, no_from)] io::Error),
     #[error(display = "Io issue")]
     Io(#[error(source)] io::Error),
     #[error(display = "Block name <{}> missing information", _0)]
@@ -78,6 +80,14 @@ pub fn pass2(p1result: Pass1, rom: &[u8], out: &Path) -> P2Result<()> {
         "Symbols that couldn't be found",
     )
     .map_err(E::NFSym)?;
+
+    let hw_syms = out.join("hardware-registers.ld");
+    write_symbols_ldscript(
+        &hw_syms,
+        &info.memory_map.hardware,
+        "N64 Hardware Registers",
+    )
+    .map_err(E::HWSym)?;
 
     blocks
         .into_par_iter()
@@ -232,6 +242,7 @@ fn find_label<'a>(mem: &'a Memory, block: &'a BlockInsn, addr: u32) -> Option<&'
     let global_labels = &mem.label_set.globals;
     let notfound_labels = &mem.not_found_labels;
     let overlayed_labels = &mem.label_set.overlays;
+    let hardware_labels = &mem.memory_map.hardware;
     let multi_labels = block.unresolved_labels.as_ref();
 
     block
@@ -240,6 +251,7 @@ fn find_label<'a>(mem: &'a Memory, block: &'a BlockInsn, addr: u32) -> Option<&'
         .and_then(|place| match place {
             Internal => internal_labels.get(&addr),
             Global => global_labels.get(&addr),
+            Hardware => hardware_labels.get(&addr),
             NotFound => notfound_labels.get(&addr),
             External(ref block) => overlayed_labels.get(block).and_then(|lbls| lbls.get(&addr)),
             MultipleExtern => multi_labels.and_then(|lbls| lbls.get(&addr)),

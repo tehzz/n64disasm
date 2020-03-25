@@ -31,6 +31,8 @@ pub enum AsmWriteErr {
     MissingOpString(Instruction),
     #[error(display = "Expected load/store instruction, got\n{:#x?}", _0)]
     BadLS(Instruction),
+    #[error(display = "Address {:08x} is hardware register {}", _0, _1)]
+    BadHW(u32, &'static str),
 }
 
 const ASM_FILE_PRELUDE: &str = include_str!("inc/prelude.text.s");
@@ -87,6 +89,7 @@ pub(super) fn write_block_asm(
                 Routine | Named(..) => writeln!(wtr, "glabel {}", &label)?,
                 JmpTarget => writeln!(wtr, "{:2}glabel {}", "", &label)?,
                 Data | JmpTbl => writeln!(wtr, "glabel {}   # Routine parsed as data", &label)?,
+                Hardware(reg) => return Err(BadHW(label.addr, reg)),
             }
         }
 

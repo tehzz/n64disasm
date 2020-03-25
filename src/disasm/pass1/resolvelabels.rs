@@ -88,6 +88,7 @@ pub fn resolve<'c, 'r>(
 pub enum LabelPlace {
     Internal,
     Global,
+    Hardware,
     NotFound,
     MultipleExtern,
     External(BlockName),
@@ -307,6 +308,11 @@ fn pass1_external_labels<'a, 'r>(
         );
         for (addr, mut label) in external_labels {
             match memory_map.get_addr_location(addr, block_name) {
+                Hardware => {
+                    proc_block
+                        .label_loc_cache
+                        .insert(addr, LabelPlace::Hardware);
+                }
                 NotFound => {
                     debug!("{:8}Couldn't find label in memory: {:x?}", "", &label);
                     proc_block

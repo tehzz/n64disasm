@@ -1,4 +1,5 @@
 use crate::config::RawCodeBlock;
+use crate::disasm::{hwreg::N64_HW_REG_MAP, labels::Label};
 use err_derive::Error;
 use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
@@ -67,6 +68,8 @@ pub struct MemoryMap {
     pub overlays: HashSet<BlockName>,
     /// set of loaded overlays for a given overlay
     pub overlay_sets: OverlaySet,
+    /// Lookup for address to hardware register label
+    pub hardware: &'static HashMap<u32, Label>,
     /// A cache of offsets into `blocks` for overlayed code (based on `overlay_sets`)
     /// So, Overlay => [Idx of Possible Loaded Other Overlays]
     overlay_set_cache: HashMap<BlockName, Vec<usize>>,
@@ -90,6 +93,7 @@ impl MemoryMap {
         let base_ovl_to_dyn_ovl = create_base_ovl_set(&parsed_config);
         let overlay_sets = create_overlay_map(raw_ovl_sets, &base_ovl_to_dyn_ovl, &parsed_config)?;
         let overlay_set_cache = cache_overlay_blocks(&overlay_sets, &parsed_config);
+        let hardware = &N64_HW_REG_MAP;
 
         let FoldBlockAcc {
             blocks,
@@ -112,6 +116,7 @@ impl MemoryMap {
             overlay_set_cache,
             block_map,
             static_blocks,
+            hardware,
         })
     }
 
@@ -132,7 +137,13 @@ impl MemoryMap {
                 .collect()
         };
 
-        AddrLocation::from(hits)
+        // The hardware registers should not map to any known code memory region
+        // so, explicitly check for the register
+        if hits.is_empty() && self.hardware.contains_key(&addr) {
+            AddrLocation::Hardware
+        } else {
+            AddrLocation::from(hits)
+        }
     }
 
     pub fn get_block(&self, name: &BlockName) -> Option<&CodeBlock> {
@@ -159,6 +170,7 @@ impl MemoryMap {
 #[derive(Debug)]
 pub enum AddrLocation {
     NotFound,
+    Hardware,
     Single(BlockName),
     Multiple(Vec<BlockName>),
 }

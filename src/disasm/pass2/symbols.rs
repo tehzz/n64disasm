@@ -105,10 +105,10 @@ where
         .label_locations
         .iter()
         .filter_map(|(&addr, loc)| match loc {
-            P::Internal | P::NotFound | P::MultipleExtern => None,
             P::External(..) => find_label(addr),
             P::Global if !range.contains(addr) => find_label(addr),
             P::Global => None,
+            P::Internal | P::NotFound | P::MultipleExtern | P::Hardware => None,
         })
         .fold(SortedAcc::default(), |mut acc, label| {
             match label.location {
